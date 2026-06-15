@@ -72,6 +72,16 @@ The script prints the SA's **`oauth2ClientId`** and the scope list. In `admin.go
 
 > All four scopes are **sensitive, not restricted** → no CASA / no annual security assessment.
 
+### Least-privilege subject (recommended)
+Authorizing DWD (above) is a one-time **super-admin** action. But the account the connector *impersonates*
+on every call (`admin_subject`) does NOT have to be — and shouldn't be — a super admin. Create a dedicated
+admin (e.g. `connector-bot@your-domain.com`) with a **custom admin role** holding only: **User Security
+Management** (signOut / turn off 2SV / revoke OAuth tokens / revoke app passwords), **Reset Password** and
+**Suspend Users** (sub-privileges under *Users*), and **group membership** (under *Groups*). Set that account
+as the subject. Limitation: a custom-role subject **cannot act on another admin account** (the Admin SDK
+403s); the connector detects admin targets (`isAdmin`/`isDelegatedAdmin`) and refuses them with a clear
+status instead of a silent 403. To remediate an admin target you'd need a super-admin subject + manual review.
+
 ## Step 3 — Use it
 - The service is **private** (`--no-allow-unauthenticated`). Open the admin UI locally:
   ```bash
@@ -81,6 +91,28 @@ The script prints the SA's **`oauth2ClientId`** and the scope list. In `admin.go
 - In the UI: set verified domains, enable the remediation actions you want, set a quarantine group,
   then **Run scan** → see flagged users → remediate (9 actions: signOut, reset password, suspend,
   restore/un-suspend, turn off 2SV, revoke tokens, revoke app-passwords, add/remove from quarantine group).
+
+## Scale, quotas, cost & hardened-org notes
+
+- **Quotas.** Remediation uses the Admin SDK Directory API: default **2,400 queries/minute per user per
+  project** (adjustable in the Cloud console, review-gated), plus a separate per-Workspace-account limit that
+  cannot be raised, and rapid-modify limits (~10 user-writes/sec/domain, 1 OU/sec/customer). Targeted
+  incident-response volume stays well within these; the connector backs off with jitter on 429/5xx. It is not
+  built for daily full-directory syncs.
+- **Cost.** At IR volume (scans every few hours, scale-to-zero Cloud Run, 2-3 Secret Manager secrets, the
+  scheduler jobs) the connector runs roughly **$0-5/month**, largely inside GCP's perpetual free tier; egress
+  is usually the first marginal cost. Cloud Scheduler's 3 free jobs are **per billing account** (not per
+  project); if you enable the durable Firestore backend, use the **(default)** database — non-default
+  Firestore databases get no free quota.
+- **VPC Service Controls.** Keep `iamcredentials.googleapis.com` inside the perimeter (it IS a VPC-SC-
+  supported service — needed for `signJwt`). The Admin SDK (`admin.googleapis.com`) is **NOT** a VPC-SC-
+  protected service: route it via `private.googleapis.com` (or a DNS/route exception) — a blanket
+  `restricted.googleapis.com` route silently blocks directory calls. Run a scan after applying perimeter
+  rules to confirm.
+- **Org policies.** `iam.disableServiceAccountKeyCreation` does **not** affect the connector (it is keyless —
+  a selling point). Under `run.allowedIngress=internal-and-cloud-load-balancing` the scheduled-pull path
+  (Cloud Scheduler → `/tasks/scan`) still works; only an inbound public webhook would need an external load
+  balancer / API Gateway.
 
 ## MSSP — serving multiple customer orgs from one deployment
 
@@ -96,8 +128,9 @@ super-admin. No new service account, no redeploy per org.
    - **Customer ID** — that org's immutable Google `customerId` (each org must have a distinct real id; do
      not reuse `my_customer`).
    - **Verified domains** — that org's domains.
-   - **Org super-admin to impersonate** (`admin_subject`) — that org's own super admin (must be an email in
-     one of its verified domains). Leave blank only for a single-org deploy; in MSSP each org sets its own.
+   - **Subject to impersonate** (`admin_subject`) — that org's own admin to act as (a least-privilege
+     custom-role admin is recommended over a super admin — see "Least-privilege subject" above). Must be an
+     email in one of its verified domains. Leave blank only for a single-org deploy; in MSSP each org sets its own.
    - **Feed company ID + API key** — that org's SOCRadar feed.
 3. **Switch** to the new tenant and **Run scan**. The connector impersonates that org's own super admin.
 

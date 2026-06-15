@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import secrets
 import subprocess
 import time
@@ -77,7 +78,8 @@ def _urlopen(req, timeout=40, retries=3):
                 ra = e.headers.get("Retry-After") if e.headers else None
                 # honor Retry-After but CAP it: a hostile/misconfigured 'Retry-After: 3600' must not stall
                 # the synchronous request worker for an hour. Bounded to 30s (< the 40s socket timeout).
-                delay = min(float(ra), 30) if ra and str(ra).isdigit() else min(2 ** attempt, 8)
+                # jitter (<=1s) on the computed backoff so concurrent retries don't thunder together
+                delay = min(float(ra), 30) if ra and str(ra).isdigit() else min(2 ** attempt, 8) + random.uniform(0, 1)
                 if attempt < retries - 1:
                     last = e
                     time.sleep(delay)
@@ -86,7 +88,7 @@ def _urlopen(req, timeout=40, retries=3):
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             last = e
             if attempt < retries - 1:
-                time.sleep(min(2 ** attempt, 8))
+                time.sleep(min(2 ** attempt, 8) + random.uniform(0, 1))
                 continue
             raise ConnectorError(f"network error after {retries} attempts: {e}") from e
     raise ConnectorError(f"request failed: {last}")
@@ -269,6 +271,17 @@ def lookup_user(email: str, token: str) -> str:
         return f"error_{e.code}"
     except ConnectorError:                            # transient network/JSON after retries (from _get)
         return "error_transient"
+
+
+def is_admin(email: str, token: str) -> bool:
+    """Best-effort: is the target a Workspace admin (super or delegated)? Refuse remediation on an admin
+    account — a custom-role (non-super) subject 403s on admins anyway, and locking out IT is dangerous.
+    Returns False on ANY error (4xx/network): this is a pre-check; the action's own 403 is the real backstop."""
+    try:
+        u = _api("GET", f"{DIRECTORY}/users/{urllib.parse.quote(email)}?fields=isAdmin,isDelegatedAdmin", token)
+        return bool(u.get("isAdmin") or u.get("isDelegatedAdmin"))
+    except Exception:
+        return False
 
 
 def revoke_sessions(email: str, token: str) -> bool:

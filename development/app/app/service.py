@@ -218,6 +218,19 @@ def remediate(tenant, flagged_id, action: str, actor: str, approved: bool = Fals
             db.audit(tenant["id"], actor, f"remediate:{action}", "blocked", email, "quarantine group out of verified domains")
             return {"ok": False, "error": "quarantine group is not in the tenant's verified domains"}
 
+    # Admin-target safeguard (EXP-GOOGLE-0041): a custom-role (non-super) subject CANNOT act on an admin
+    # target (Admin SDK 403s), and locking out the IT dept is dangerous. Refuse here with a clear status
+    # instead of a raw 403. Best-effort readonly pre-check; ANY failure falls through (the action's own 403
+    # is the backstop) so a transient blip never blocks a legitimate remediation.
+    try:
+        ro_token = connector.get_dwd_token([connector.SCOPE_READONLY],
+                                           subject=_tenant_subject(tenant), service_account=_tenant_sa(tenant))
+        if connector.is_admin(email, ro_token):
+            db.audit(tenant["id"], actor, f"remediate:{action}", "blocked", email, "admin target excluded")
+            return {"ok": False, "error": "refusing to remediate an admin account (needs a super-admin subject + manual review)"}
+    except Exception:
+        pass
+
     # --- act ---
     try:
         token = connector.get_dwd_token([connector.ACTIONS[action]["scope"]],

@@ -59,6 +59,11 @@ on the SOCRadar write-back (alarm id + status only).
 - IAP replaces caller identity → can break the Scheduler path (give it OIDC or a separate identity).
 - VPC-SC protects Google API access but does NOT block exfil to a non-Google host (SOCRadar) — the egress
   firewall does that; they are complementary.
+- VPC-SC service scope: `iamcredentials.googleapis.com` IS a VPC-SC-supported service (keep it in-perimeter
+  for `signJwt`); `admin.googleapis.com` (Admin SDK) is **NOT** — route it via `private.googleapis.com`, not a
+  blanket `restricted.googleapis.com` rule, which silently blocks directory calls.
+- DWD / service-account actions have **no originating caller IP** in the Workspace admin audit log (the IP
+  field is empty). SIEM correlation must key on actor + event + the connector's own app logs, not on caller IP.
 - Starlette **signs** but does not **encrypt** the session → never put secrets in the session payload.
 - App-layer Fernet with an env-sourced KEK adds near-zero protection (ciphertext + key share one trust boundary).
 - The one-click Cloud Run button cannot set a runtime SA or Secret Manager secrets → it is DEV/EVAL-ONLY;

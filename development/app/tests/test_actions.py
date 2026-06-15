@@ -72,7 +72,9 @@ def check_action(tenant, fu, action):
     if not res.get("ok"):
         return False, f"remediate returned {res}"
     scope_suffix, expected_calls = EXPECT[action]
-    if not SCOPES or scope_suffix not in SCOPES[0]:
+    # the gate also requests admin.directory.user.readonly for the admin-target pre-check (EXP-GOOGLE-0041),
+    # so the action's own scope is among the requested scopes, not necessarily first.
+    if not any(scope_suffix in s for s in SCOPES):
         return False, f"scope mismatch: requested {SCOPES}, expected suffix {scope_suffix}"
     for method, sub, body_check in expected_calls:
         match = [c for c in CALLS if c[0] == method and sub in urllib.parse.unquote(c[1])]
@@ -103,6 +105,16 @@ def main():
     r = service.remediate(tenant, op["id"], "signout", "admin@example.com")
     g1 = (not r["ok"]) and "operator" in r["error"]
     print(("  PASS  " if g1 else "  FAIL  ") + "operator excluded from remediation")
+
+    # admin-target excluded (EXP-GOOGLE-0041): a target that is a Workspace admin is refused
+    db.upsert_flagged(tenant["id"], "itadmin@example.com", {"botnet"}, "found", 1.0)
+    adm = [r for r in db.list_flagged(tenant["id"]) if r["email"] == "itadmin@example.com"][0]
+    _orig_ia = connector.is_admin
+    connector.is_admin = lambda email, token: email == "itadmin@example.com"
+    r = service.remediate(tenant, adm["id"], "signout", "admin@example.com")
+    connector.is_admin = _orig_ia
+    g1b = (not r["ok"]) and "admin" in r["error"].lower()
+    print(("  PASS  " if g1b else "  FAIL  ") + "admin-target excluded from remediation")
 
     # action not enabled
     db.update_tenant(tenant["id"], enabled_actions=json.dumps([]))
@@ -152,7 +164,7 @@ def main():
         g7 = False
     print(("  PASS  " if g7 else "  FAIL  ") + "non-HTTP error -> clean False (no crash)")
 
-    ok_all = ok_all and g1 and g2 and g3 and g4 and g5 and g6 and g7
+    ok_all = ok_all and g1 and g1b and g2 and g3 and g4 and g5 and g6 and g7
     print("\nRESULT:", "PASS — all 9 actions + gating verified (no gcloud)" if ok_all else "FAIL")
     return 0 if ok_all else 1
 
