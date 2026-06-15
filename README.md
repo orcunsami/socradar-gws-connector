@@ -1,6 +1,6 @@
 # SOCRadar Google Workspace Connector
 
-[![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run/?git_repo=https://github.com/orcunsami/socradar-gws-connector.git&dir=development/app)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/orcunsami/socradar-gws-connector.git&cloudshell_workspace=.&cloudshell_tutorial=cloudshell-tutorial.md)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 Automated remediation for **leaked employee credentials** detected by SOCRadar. It pulls Botnet, PII Exposure, and VIP Protection alerts, finds the matching accounts in your Google Workspace, and runs the response actions you choose (revoke sessions, suspend, reset password, and more). Every action is written to a tamper evident audit log. If you turn on alarm close-back, the originating SOCRadar alarm is resolved too (off by default).
@@ -31,15 +31,13 @@ Workspace  (HMAC chain, off-box mirror)
 
 Two ways. Most customers use the button.
 
-### Option 1: Run on Google Cloud button
+### Option 1: Open in Cloud Shell
 
-Click the button at the top. A form opens in Google Cloud Shell, collects your settings, builds the container, and deploys a private Cloud Run service to your own project. No local terminal needed.
+Click the button at the top. Google Cloud Shell opens in your browser with this repository cloned and a step-by-step tutorial in the side panel. No local install. The tutorial walks you through setting your project, creating the sign-in OAuth client, and running the deploy.
 
-The form collects: your Workspace domain and customer id, the keyless-DWD service account, the SOCRadar feed company id and key, the OAuth client for sign in, the lookback window, and which remediation actions are enabled.
+The deploy (`deploy/deploy-to-gcp.sh`) enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation, stores the feed key and the audit key in Secret Manager, deploys a private Cloud Run service, and creates the periodic-scan scheduler job. At the end it prints the service account client id.
 
-A postcreate hook then finishes the wiring the button form cannot do itself (it has no run-as service account field): it binds keyless domain-wide delegation (the runtime service account signs JWTs to impersonate itself), runs the service as that service account, moves the feed key and audit key into Secret Manager off plain environment, and creates the Cloud Scheduler jobs for periodic scans. At the end it prints the service account client id.
-
-One manual step remains, the same as Option 2: your Workspace super admin authorizes that client id for the four directory scopes in `admin.google.com`.
+One manual step remains: your Workspace super admin authorizes that client id for the four directory scopes in `admin.google.com`, their own way.
 
 ### Option 2: One script (Secret Manager)
 
