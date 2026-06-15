@@ -1,0 +1,58 @@
+# Secrets / credentials — never commit
+.env
+*.env
+service-account*.json
+*.creds
+*.key
+
+# Local-only files with passwords / API keys
+*.local.*
+development/poc/test-users.local.md
+
+# PoC scratch — carries real test passwords / emails / project id (not product code)
+development/poc/
+
+# API reference dir holds a real preprod key (postman collection) — exclude the whole dir
+api-reference/
+
+# Raw research dumps + auto handoffs (working notes, real identifiers)
+sonuc1.txt
+sonuc2.txt
+arastirma4.txt
+RESEARCH-BRIEF.md
+HANDOFF-AUTO.md
+**/HANDOFF-AUTO.md
+HANDOFF.md
+progress/handoff.md
+
+# Terraform state/vars carry secrets in plaintext
+*.tfvars
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# App local state / venv (generic patterns — sqlite sidecars carry the same plaintext key)
+.venv/
+development/app/.venv/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Personal recording aid (Turkish, video-shoot specific) — not product
+kurulum-takip.html
+
+# Internal engineering notes — kept on disk, NOT shipped in the product repo customers clone.
+# No credentials, but AI-operator rules, cross-project lessons, employee identifiers, and internal
+# tooling. SOCRadar: include these only in an internal mirror if wanted, never in the customer package.
+CLAUDE.md
+from-azure.md
+from-elastic.md
+task.md
+.claude/
+
+# Python / build
+__pycache__/
+*.pyc
+.DS_Store

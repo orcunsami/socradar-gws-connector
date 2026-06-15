@@ -1,0 +1,502 @@
+"""
+SOCRadar Google Workspace Connector — Internal admin app.
+
+Single FastAPI service: admin web UI (the Workspace surface) + the proven connector behind it.
+Runs locally ($0, DEV_LOGIN or localhost OAuth) and deploys to Cloud Run unchanged.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import secrets
+from pathlib import Path
+
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+from . import auth, connector, db, guardrails, metrics, service
+from .config import assert_startup_safe, is_cloud_run, settings
+
+log = logging.getLogger("socradar.gws")
+
+BASE = Path(__file__).parent
+app = FastAPI(title="SOCRadar Google Workspace Connector")
+# Hardened session cookie: encrypted transport in prod, bounded lifetime (was 14d default).
+# same_site="lax" (NOT strict): the Google OAuth callback is a cross-site top-level GET redirect from
+# accounts.google.com; SameSite=strict withholds the session cookie on it, so Authlib can't read the
+# OAuth state it stored and EVERY production sign-in fails. Lax sends the cookie on top-level GET
+# navigations (callback works) while still withholding it on cross-site POSTs. State-changing POSTs are
+# separately protected by the per-form _csrf token, so lax is not a CSRF regression.
+app.add_middleware(SessionMiddleware, secret_key=settings.secret_key,
+                   same_site="lax", https_only=is_cloud_run(), max_age=settings.session_max_age)
+app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
+templates = Jinja2Templates(directory=BASE / "templates")
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """Defensive response headers (DAST finding): clickjacking, MIME-sniff, referrer leak, and a strict
+    CSP. HSTS only over HTTPS (Cloud Run) — meaningless/harmful on local http."""
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Content-Security-Policy",
+                            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+                            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+    if is_cloud_run():
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
+
+
+@app.exception_handler(Exception)
+async def _generic_error(request: Request, exc: Exception):
+    """Never leak a stack trace / internal detail to the client (could carry secrets/PII)."""
+    log.error("unhandled error on %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    return JSONResponse({"error": "internal error"}, status_code=500)
+
+
+def _fmt_ts(epoch):
+    if not epoch:
+        return "—"
+    import datetime
+    return datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+
+
+templates.env.filters["dt"] = _fmt_ts
+
+
+@app.on_event("startup")
+def _startup():
+    # emit INFO to stdout so the off-box audit mirror (socradar.audit) is actually captured by Cloud Logging
+    logging.basicConfig(level=logging.INFO)
+    for w in assert_startup_safe():        # fail-closed guard (raises on catastrophic misconfig)
+        log.warning("STARTUP WARNING: %s", w)
+    log.info("startup: env=%s cloud_run=%s oauth=%s dev_login_active=%s remediation_mode=%s feed_key=%s",
+             settings.app_env, is_cloud_run(), settings.oauth_configured, settings.dev_login_active,
+             guardrails.effective_mode(), "set" if settings.feed_api_key else "MISSING")
+    db.init_db()
+
+
+# ---------- helpers ----------
+def _csrf(request: Request) -> str:
+    tok = request.session.get("csrf")
+    if not tok:
+        tok = secrets.token_urlsafe(32)
+        request.session["csrf"] = tok
+    return tok
+
+
+def _check_csrf(request: Request, sent: str) -> bool:
+    return bool(sent) and secrets.compare_digest(sent, request.session.get("csrf", ""))
+
+
+def _active_tenant(request: Request):
+    """The tenant the admin is currently operating on (session-selected; defaults to first)."""
+    tid = request.session.get("tenant_id")
+    if tid:
+        t = db.get_tenant(tid)
+        if t:
+            return t
+    return db.first_tenant()
+
+
+def _ctx(request: Request, user: dict, **extra) -> dict:
+    base = {"user": user, "csrf": _csrf(request),
+            "version": __import__("app").__version__, "actions": connector.ACTIONS,
+            "active_tenant": _active_tenant(request), "all_tenants": db.list_tenants()}
+    base.update(extra)
+    return base
+
+
+def _render(name, request, user, **extra) -> HTMLResponse:
+    return templates.TemplateResponse(request, name, _ctx(request, user, **extra))
+
+
+# ---------- auth routes ----------
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if auth.current_user(request):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request, "login.html", {
+        "oauth": settings.oauth_configured, "dev": settings.dev_login_active,
+        "domain": settings.allowed_domain})
+
+
+@app.get("/auth/login")
+async def auth_login(request: Request):
+    return await auth.start_login(request)
+
+
+@app.get("/auth/callback", name="auth_callback")
+async def auth_callback(request: Request):
+    return await auth.finish_login(request)
+
+
+@app.get("/auth/logout")
+def auth_logout(request: Request):
+    return auth.logout(request)
+
+
+# ---------- pages ----------
+@app.get("/", response_class=HTMLResponse)
+def dashboard(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    counts = db.flagged_counts(t["id"])
+    last = db.last_scan(t["id"])
+    return _render("dashboard.html", request, user, tenant=t, counts=counts, last=last,
+                   totals=json.loads(last["totals"]) if last and last["totals"] else {})
+
+
+@app.post("/scan")
+def scan(request: Request, csrf: str = Form("")):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/?err=csrf", status_code=303)
+    result = service.run_scan(_active_tenant(request), user["email"])
+    flag = "scan_ok" if result.get("ok") else "scan_err"
+    return RedirectResponse(f"/flagged?{flag}=1", status_code=303)
+
+
+@app.get("/flagged", response_class=HTMLResponse)
+def flagged(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    rows = []
+    for r in db.list_flagged(t["id"]):
+        rows.append({**dict(r), "sources_list": json.loads(r["sources"])})
+    return _render("flagged.html", request, user, tenant=t, rows=rows,
+                   enabled=json.loads(t["enabled_actions"]),
+                   admin_subject=service._tenant_subject(t),   # MSSP: hide remediation for THIS org's admin
+                   mode=guardrails.effective_mode(), dry_run=settings.auto_dry_run,
+                   kill_switch=settings.auto_kill_switch, close_alarm=settings.close_socradar_alarm)
+
+
+def _tenant_match(request: Request, t, exp_tenant: str) -> bool:
+    """MSSP stale-tab guard (R3): the form was rendered for exp_tenant; if the session's active tenant has
+    since changed (another tab switched orgs), the POST would hit the WRONG org. Reject the mismatch."""
+    return not exp_tenant or str(exp_tenant) == str(t["id"])
+
+
+@app.post("/flagged/{flagged_id}/remediate")
+def remediate(request: Request, flagged_id: str, action: str = Form(...), exp_tenant: str = Form(""),
+              csrf: str = Form("")):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/flagged?err=csrf", status_code=303)
+    if not auth.is_remediation_admin(user["email"]):   # RBAC: triage != authorized to act
+        db.audit(_active_tenant(request)["id"], user["email"], f"remediate:{action}", "blocked",
+                 detail="not a remediation admin")
+        return RedirectResponse("/flagged?err=forbidden", status_code=303)
+    t = _active_tenant(request)
+    if not _tenant_match(request, t, exp_tenant):   # stale-tab: active org changed since the page rendered
+        return RedirectResponse("/flagged?err=tenant", status_code=303)
+    # two-person rule: high-blast actions don't execute on one admin's click — queue for a second admin
+    if settings.require_approval and action in settings.approval_action_list:
+        fu = db.get_flagged_for_tenant(flagged_id, t["id"])   # MSSP: never queue another org's email/id
+        if fu:
+            db.create_approval(t["id"], flagged_id, fu["email"], action, user["email"])
+            db.audit(t["id"], user["email"], f"approval_requested:{action}", "pending", fu["email"])
+            return RedirectResponse("/approvals?requested=1", status_code=303)
+    result = service.remediate(t, flagged_id, action, user["email"])
+    flag = "rem_ok" if result.get("ok") else "rem_err"
+    return RedirectResponse(f"/flagged?{flag}=1", status_code=303)
+
+
+@app.get("/metrics", response_class=HTMLResponse)
+def metrics_page(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    return _render("metrics.html", request, user, tenant=t, m=metrics.compute(t["id"]))
+
+
+@app.get("/metrics.json")
+def metrics_json(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    t = _active_tenant(request)
+    return JSONResponse(metrics.compute(t["id"]))
+
+
+@app.get("/approvals", response_class=HTMLResponse)
+def approvals_page(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    return _render("approvals.html", request, user, tenant=t,
+                   pending=db.list_approvals(t["id"], "pending"),
+                   recent=db.list_approvals(t["id"])[:20],
+                   is_admin=auth.is_remediation_admin(user["email"]),
+                   me=user["email"])
+
+
+@app.post("/approvals/{approval_id}/approve")
+def approval_approve(request: Request, approval_id: str, csrf: str = Form("")):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/approvals?err=csrf", status_code=303)
+    t = _active_tenant(request)
+    ap = db.get_approval(approval_id)
+    if not ap or str(ap["tenant_id"]) != str(t["id"]) or ap["state"] != "pending":
+        return RedirectResponse("/approvals?err=state", status_code=303)
+    if not auth.is_remediation_admin(user["email"]):
+        return RedirectResponse("/approvals?err=forbidden", status_code=303)
+    if user["email"].strip().lower() == (ap["requester"] or "").strip().lower():
+        # four-eyes: the requester cannot approve their own request
+        db.audit(t["id"], user["email"], f"approval_approve:{ap['action']}", "blocked",
+                 ap["email"], "requester==approver (four-eyes)")
+        return RedirectResponse("/approvals?err=foureyes", status_code=303)
+    # atomic claim (CAS): only the request that flips pending->executed proceeds (anti double-execution)
+    if not db.set_approval_state(approval_id, "executed", user["email"], expect="pending"):
+        return RedirectResponse("/approvals?err=state", status_code=303)
+    result = service.remediate(t, ap["flagged_id"], ap["action"], user["email"], approved=True)
+    db.audit(t["id"], user["email"], f"approval_approve:{ap['action']}",
+             "ok" if result.get("ok") else "fail", ap["email"], f"requested by {ap['requester']}")
+    return RedirectResponse("/approvals?approved=1", status_code=303)
+
+
+@app.post("/approvals/{approval_id}/reject")
+def approval_reject(request: Request, approval_id: str, csrf: str = Form("")):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/approvals?err=csrf", status_code=303)
+    t = _active_tenant(request)
+    ap = db.get_approval(approval_id)
+    if not ap or str(ap["tenant_id"]) != str(t["id"]) or ap["state"] != "pending":
+        return RedirectResponse("/approvals?err=state", status_code=303)
+    if not auth.is_remediation_admin(user["email"]):
+        return RedirectResponse("/approvals?err=forbidden", status_code=303)
+    # CAS (same as approve): only flip a still-pending approval. Without expect=, a concurrent approve that
+    # just executed (pending->executed) could be overwritten as 'rejected', mis-recording an executed action.
+    if not db.set_approval_state(approval_id, "rejected", user["email"], expect="pending"):
+        return RedirectResponse("/approvals?err=state", status_code=303)
+    db.audit(t["id"], user["email"], f"approval_reject:{ap['action']}", "rejected", ap["email"])
+    return RedirectResponse("/approvals?rejected=1", status_code=303)
+
+
+@app.post("/flagged/{flagged_id}/auto-remediate")
+def auto_remediate_one(request: Request, flagged_id: str, exp_tenant: str = Form(""), csrf: str = Form("")):
+    """Semi-auto one-click: apply ALL enabled actions to one user (human-triggered)."""
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/flagged?err=csrf", status_code=303)
+    if not auth.is_remediation_admin(user["email"]):   # RBAC: triage != authorized to act
+        db.audit(_active_tenant(request)["id"], user["email"], "auto-remediate", "blocked",
+                 detail="not a remediation admin")
+        return RedirectResponse("/flagged?err=forbidden", status_code=303)
+    t = _active_tenant(request)
+    if not _tenant_match(request, t, exp_tenant):   # stale-tab guard (R3)
+        return RedirectResponse("/flagged?err=tenant", status_code=303)
+    results = service.apply_enabled_actions(t, flagged_id, user["email"])
+    # honest UI: don't flash success when nothing ran, an action failed, or the id wasn't this tenant's.
+    statuses = [s for _, s in results]
+    ok = bool(results) and statuses != ["not in this tenant"] and not any(s == "fail" for s in statuses)
+    return RedirectResponse(f"/flagged?{'rem_ok' if ok else 'rem_err'}=1", status_code=303)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    return _render("settings.html", request, user, tenant=t,
+                   verified_domains=", ".join(json.loads(t["verified_domains"])),
+                   enabled=json.loads(t["enabled_actions"]))
+
+
+@app.post("/settings")
+def settings_save(request: Request, verified_domains: str = Form(""), feed_base: str = Form(""),
+                  feed_company_id: str = Form(""), feed_api_key: str = Form(""),
+                  feed_start_date: str = Form(""), quarantine_group: str = Form(""),
+                  admin_subject: str = Form(""), service_account: str = Form(""),
+                  enabled_actions: list[str] = Form(default=[]), csrf: str = Form("")):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/settings?err=csrf", status_code=303)
+    if not auth.is_remediation_admin(user["email"]):   # changing enabled_actions/feed-key/domains is privileged
+        db.audit(_active_tenant(request)["id"], user["email"], "settings_save", "blocked",
+                 detail="not a remediation admin")
+        return RedirectResponse("/settings?err=forbidden", status_code=303)
+    t = _active_tenant(request)
+    domains = [d.strip().lower() for d in verified_domains.split(",") if d.strip()]
+    # MSSP isolation (cross-tenant contamination guard): an empty domains field must NEVER backfill the
+    # GLOBAL settings.default_domain — that is org A's domain, not this tenant's. Doing so would silently
+    # widen tenant B's scope to org A and (with a blank admin_subject inheriting the global super-admin)
+    # turn the documented "fails safe / cross-org 403" fallback into a live cross-org remediation path.
+    # Keep THIS tenant's existing domains instead; the form just didn't change them.
+    if not domains:
+        domains = json.loads(t["verified_domains"])
+    valid_actions = [a for a in enabled_actions if a in connector.ACTIONS]
+    qg = quarantine_group.strip()
+    if qg and not connector.in_verified_domains(qg, domains):
+        return RedirectResponse("/settings?err=qgroup", status_code=303)
+    # MSSP (edit-tenant): the per-org super-admin must live in this tenant's verified domains (same rule as create)
+    asub = admin_subject.strip().lower()
+    if asub and ("@" not in asub or not connector.in_verified_domains(asub, domains)):
+        return RedirectResponse("/settings?err=adminsub", status_code=303)
+    fields = {
+        "verified_domains": json.dumps(domains),
+        "feed_base": feed_base.strip() or t["feed_base"],
+        "feed_company_id": feed_company_id.strip() or t["feed_company_id"],
+        "feed_start_date": feed_start_date.strip() or t["feed_start_date"],
+        "enabled_actions": json.dumps(valid_actions),
+        "quarantine_group": qg,
+        "admin_subject": asub,
+        "service_account": service_account.strip(),
+    }
+    if feed_api_key.strip():                 # only overwrite key if a new one was typed
+        fields["feed_api_key"] = feed_api_key.strip()
+    db.update_tenant(t["id"], **fields)
+    db.audit(t["id"], user["email"], "settings", "ok",
+             detail=f"domains={domains} actions={valid_actions}")
+    return RedirectResponse("/settings?saved=1", status_code=303)
+
+
+@app.get("/audit", response_class=HTMLResponse)
+def audit_page(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    return _render("audit.html", request, user, tenant=t, rows=db.list_audit(t["id"]))
+
+
+@app.get("/tenants", response_class=HTMLResponse)
+def tenants_page(request: Request):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    rows = [{**dict(t), "domains": ", ".join(json.loads(t["verified_domains"]))} for t in db.list_tenants()]
+    return _render("tenants.html", request, user, tenant=_active_tenant(request), tenants=rows)
+
+
+@app.post("/tenants")
+def tenant_create(request: Request, customer_id: str = Form(...), name: str = Form(...),
+                  verified_domains: str = Form(...), feed_base: str = Form(...),
+                  feed_company_id: str = Form(...), feed_start_date: str = Form(...),
+                  feed_api_key: str = Form(""), admin_subject: str = Form(""),
+                  service_account: str = Form(""), csrf: str = Form("")):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/tenants?err=csrf", status_code=303)
+    if not auth.is_remediation_admin(user["email"]):   # creating a tenant (domains+feed key) is privileged
+        db.audit(_active_tenant(request)["id"], user["email"], "tenant_create", "blocked", detail="not a remediation admin")
+        return RedirectResponse("/tenants?err=forbidden", status_code=303)
+    domains = [d.strip().lower() for d in verified_domains.split(",") if d.strip()]
+    cid = customer_id.strip()
+    # customerId is an immutable Google id (alphanumeric/underscore); require it + at least one domain
+    if not cid or not cid.replace("_", "").isalnum() or not name.strip() or not domains:
+        return RedirectResponse("/tenants?err=invalid", status_code=303)
+    # MSSP: the per-org super-admin to impersonate MUST live in one of THIS tenant's verified domains
+    # (an org can only be impersonated via its own admin; this also blocks pointing tenant A at B's domain).
+    asub = admin_subject.strip().lower()
+    if asub and ("@" not in asub or not connector.in_verified_domains(asub, domains)):
+        return RedirectResponse("/tenants?err=adminsub", status_code=303)
+    try:
+        tid = db.create_tenant(cid, name.strip(), domains, feed_base.strip(),
+                               feed_company_id.strip(), feed_api_key.strip(), feed_start_date.strip(),
+                               admin_subject=asub, service_account=service_account.strip())
+    except db.DuplicateTenantError:
+        return RedirectResponse("/tenants?err=dup", status_code=303)
+    # MSSP hygiene: a multi-tenant deploy where this org has no admin_subject silently inherits the global
+    # one — fails safe (cross-org 403, no leak) but is a misconfiguration. Audit it once so it's visible.
+    if not asub and len(db.list_tenants()) > 1:
+        db.audit(tid, user["email"], "tenant_create", "warning",
+                 detail="no per-tenant admin_subject in a multi-tenant deploy — falling back to the global; "
+                        "set this org's own super-admin so it isn't impersonated as another org's admin")
+    db.audit(tid, user["email"], "tenant_create", "ok", detail=f"{name} ({customer_id}) domains={domains}")
+    return RedirectResponse("/tenants?created=1", status_code=303)
+
+
+@app.post("/tenants/switch")
+def tenant_switch(request: Request, tenant_id: str = Form(...), csrf: str = Form("")):
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not _check_csrf(request, csrf):
+        return RedirectResponse("/tenants?err=csrf", status_code=303)
+    if not auth.is_remediation_admin(user["email"]):   # switching the operating tenant is privileged
+        return RedirectResponse("/tenants?err=forbidden", status_code=303)
+    if db.get_tenant(tenant_id):
+        request.session["tenant_id"] = tenant_id
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/tasks/scan")
+def tasks_scan(request: Request):
+    """Headless scan trigger for Cloud Scheduler (automated periodic scanning).
+
+    NOT app-login/CSRF gated — protected at the INFRASTRUCTURE layer: deploy the service with
+    --no-allow-unauthenticated and grant the scheduler's service account roles/run.invoker, so only
+    its OIDC-authenticated call reaches this route. Scans EVERY tenant (headless has no session, so it
+    must not depend on the session-selected tenant — it would otherwise only ever scan the first one).
+    """
+    if settings.scan_trigger_token and not secrets.compare_digest(
+            request.headers.get("x-scan-token", ""), settings.scan_trigger_token):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    tenants = db.list_tenants()
+    if not tenants:
+        return JSONResponse({"ok": False, "error": "no tenant configured"}, status_code=400)
+    results = {}
+    all_ok = True
+    for t in tenants:
+        r = service.run_scan(t, "scheduler")
+        results[str(t["id"])] = r
+        all_ok = all_ok and r.get("ok", False)
+    return JSONResponse({"ok": all_ok, "tenants": results}, status_code=200 if all_ok else 502)
+
+
+@app.post("/tasks/verify-audit")
+def tasks_verify_audit(request: Request):
+    """Scheduled tamper-check of the audit hash-chain for every tenant (Cloud Scheduler). Same infra +
+    token guard as /tasks/scan. A broken chain (edit/deletion/reorder) is itself audited + 502'd so it
+    surfaces in monitoring — turning the off-line integrity check into an active, scheduled control."""
+    if settings.scan_trigger_token and not secrets.compare_digest(
+            request.headers.get("x-scan-token", ""), settings.scan_trigger_token):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    results = {}
+    all_ok = True
+    for t in db.list_tenants():
+        v = db.verify_audit_chain(t["id"])
+        results[str(t["id"])] = v
+        if not v.get("ok"):
+            all_ok = False
+            db.audit(t["id"], "scheduler", "audit_integrity", "alert",
+                     detail=f"chain verify FAILED: {v.get('reason')} @ {v.get('broken_at')}")
+    return JSONResponse({"ok": all_ok, "tenants": results}, status_code=200 if all_ok else 502)
+
+
+@app.get("/healthz")
+def healthz():
+    try:
+        db.first_tenant()
+        return JSONResponse({"status": "ok", "oauth": settings.oauth_configured})
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)

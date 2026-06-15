@@ -1,0 +1,20 @@
+# Keep secrets, local state, and dev cruft OUT of image layers (they persist in layer tarballs even if
+# deleted later). Supply-chain + secret-hygiene control.
+.env
+.env.*
+*.sqlite3
+*.sqlite3-*
+*.local.md
+*.key
+*.pem
+*-key.json
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+tests/
+.pytest_cache/
+.git/
+.gitignore
+*.md
+!app/templates/**

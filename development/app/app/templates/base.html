@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SOCRadar · Google Workspace Connector{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">SOCRadar<span>Google Workspace Connector</span></div>
+  {% if user %}
+  <nav>
+    <a href="/">Dashboard</a>
+    <a href="/flagged">Flagged Users</a>
+    <a href="/approvals">Approvals</a>
+    <a href="/metrics">Metrics</a>
+    <a href="/settings">Settings</a>
+    <a href="/audit">Audit</a>
+    <a href="/tenants">Tenants</a>
+  </nav>
+  {% if all_tenants and all_tenants|length > 1 %}
+  <form method="post" action="/tenants/switch" class="tenant-switch">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <select name="tenant_id" onchange="this.form.submit()" title="Active tenant">
+      {% for t in all_tenants %}
+      <option value="{{ t.id }}" {% if active_tenant and t.id == active_tenant.id %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+  <div class="user"><span class="email">{{ user.email }}</span><a class="btn ghost" href="/auth/logout">Sign out</a></div>
+  {% endif %}
+</header>
+<main class="container">
+  {% set q = request.query_params %}
+  {% if q.get('scan_ok') %}<div class="flash ok">Scan completed — see Flagged Users.</div>{% endif %}
+  {% if q.get('scan_err') %}<div class="flash err">Scan failed — check Audit for the reason.</div>{% endif %}
+  {% if q.get('rem_ok') %}<div class="flash ok">Remediation applied.</div>{% endif %}
+  {% if q.get('rem_err') %}<div class="flash err">Remediation blocked or failed — check Audit.</div>{% endif %}
+  {% if q.get('saved') %}<div class="flash ok">Settings saved.</div>{% endif %}
+  {% if q.get('created') %}<div class="flash ok">Tenant created.</div>{% endif %}
+  {% if q.get('err') == 'dup' %}<div class="flash err">A tenant with that customer ID already exists.</div>{% endif %}
+  {% if q.get('err') == 'invalid' %}<div class="flash err">Invalid input — customer ID must be alphanumeric and at least one verified domain is required.</div>{% endif %}
+  {% if q.get('err') == 'qgroup' %}<div class="flash err">Quarantine group must be in one of the tenant's verified domains.</div>{% endif %}
+  {% if q.get('err') == 'adminsub' %}<div class="flash err">The org super-admin must be an email in one of this tenant's verified domains.</div>{% endif %}
+  {% if q.get('err') == 'tenant' %}<div class="flash err">The active tenant changed in another tab — action cancelled. Re-check which org is active and retry.</div>{% endif %}
+  {% if q.get('err') == 'csrf' %}<div class="flash err">Security token mismatch — please retry.</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="foot">
+  v{{ version|default('') }} · Internal app · keyless domain-wide delegation{% if tenant is defined and tenant %} · tenant: {{ tenant.name }} ({{ tenant.customer_id }}){% endif %}
+</footer>
+</body>
+</html>

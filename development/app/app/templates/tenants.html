@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Tenants</h1>
+<p class="muted">Each tenant is an isolated customer: its own verified domains, feed, flagged users, and audit. The active tenant drives every other page.</p>
+
+<table class="grid">
+  <thead><tr><th>Name</th><th>Customer ID</th><th>Verified domains</th><th>Feed</th><th></th></tr></thead>
+  <tbody>
+  {% for t in tenants %}
+    <tr>
+      <td>{{ t.name }} {% if active_tenant and t.id == active_tenant.id %}<span class="pill ok">active</span>{% endif %}</td>
+      <td class="mono small">{{ t.customer_id }}</td>
+      <td class="small">{{ t.domains }}</td>
+      <td class="muted small">{{ t.feed_base }} · company {{ t.feed_company_id }}</td>
+      <td>
+        {% if not (active_tenant and t.id == active_tenant.id) %}
+        <form method="post" action="/tenants/switch" class="inline">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="tenant_id" value="{{ t.id }}">
+          <button class="btn small" type="submit">Switch to</button>
+        </form>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div class="panel" style="margin-top:24px">
+  <h2>Add tenant</h2>
+  <form method="post" action="/tenants" class="form" style="max-width:560px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Name</label>
+    <input type="text" name="name" placeholder="Acme Corp" required>
+    <label>Customer ID <span class="muted small">(immutable Google customerId; the tenant key)</span></label>
+    <input type="text" name="customer_id" placeholder="C0xxxxxxx" required>
+    <label>Verified domains <span class="muted small">(comma-separated — lookups outside these are skipped)</span></label>
+    <input type="text" name="verified_domains" placeholder="acme-corp.com" required>
+    <label>Org super-admin to impersonate <span class="muted small">(MSSP: this org's own super-admin; must be an email in a verified domain above. Blank = use the deployment default.)</span></label>
+    <input type="text" name="admin_subject" placeholder="admin@acme-corp.com">
+    <label>Service account override <span class="muted small">(optional — leave blank to use the shared SOCRadar SA)</span></label>
+    <input type="text" name="service_account" placeholder="leave blank for the default">
+    <label>Feed base URL</label>
+    <input type="text" name="feed_base" value="https://platform.socradar.com" required>
+    <label>Feed company ID</label>
+    <input type="text" name="feed_company_id" placeholder="your SOCRadar company id" required>
+    <label>Feed start date</label>
+    <input type="text" name="feed_start_date" value="2026-06-01" placeholder="YYYY-MM-DD" required>
+    <label>Feed API key</label>
+    <input type="password" name="feed_api_key" placeholder="optional now; set later in Settings">
+    <button class="btn primary" type="submit" style="margin-top:14px">Create tenant</button>
+  </form>
+</div>
+{% endblock %}

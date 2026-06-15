@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Audit Log</h1>
+{% if rows %}
+<table class="grid">
+  <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Result</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="muted small">{{ r.ts|dt }}</td>
+      <td class="mono small">{{ r.actor }}</td>
+      <td><span class="badge">{{ r.action }}</span></td>
+      <td class="mono small">{{ r.target_email or '—' }}</td>
+      <td>
+        {% if r.result == 'ok' %}<span class="pill ok">ok</span>
+        {% elif r.result == 'blocked' %}<span class="pill warn">blocked</span>
+        {% else %}<span class="pill err">{{ r.result }}</span>{% endif %}
+      </td>
+      <td class="muted small">{{ r.detail or '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No audit entries yet.</p>{% endif %}
+{% endblock %}

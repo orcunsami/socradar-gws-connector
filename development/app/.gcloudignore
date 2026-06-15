@@ -1,0 +1,12 @@
+# Cloud Run --source upload ignore (separate from .dockerignore/.gitignore).
+# CRITICAL: keep secrets + local state out of the source uploaded to Cloud Build.
+.env
+*.env
+!.env.example
+*.sqlite3
+*.sqlite3-journal
+.venv/
+__pycache__/
+*.pyc
+tests/
+.DS_Store

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Approvals</h1>
+</div>
+
+<div class="flash info">
+  Four-eyes control: high-blast actions queue here and need a <b>second</b> remediation admin to approve
+  (the requester cannot approve their own request).
+</div>
+
+<h2 class="muted small">Pending</h2>
+{% if pending %}
+<table class="grid">
+  <thead><tr><th>Requested</th><th>User</th><th>Action</th><th>Requester</th><th>Decision</th></tr></thead>
+  <tbody>
+  {% for a in pending %}
+    <tr>
+      <td class="muted small">{{ a.created_at|dt }}</td>
+      <td class="mono">{{ a.email }}</td>
+      <td><span class="badge">{{ a.action }}</span></td>
+      <td class="mono small">{{ a.requester }}</td>
+      <td>
+        {% if is_admin and me != a.requester %}
+          <form method="post" action="/approvals/{{ a.id }}/approve" class="inline"
+                onsubmit="return confirm('Approve {{ a.action }} for {{ a.email }}?')">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="btn danger small" type="submit">Approve</button>
+          </form>
+          <form method="post" action="/approvals/{{ a.id }}/reject" class="inline">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="btn small" type="submit">Reject</button>
+          </form>
+        {% elif me == a.requester %}
+          <span class="muted small">your request — needs another admin</span>
+        {% else %}
+          <span class="muted small">remediation admin only</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No pending approvals.</p>
+{% endif %}
+
+<h2 class="muted small" style="margin-top:2rem">Recent decisions</h2>
+{% if recent %}
+<table class="grid">
+  <thead><tr><th>When</th><th>User</th><th>Action</th><th>State</th><th>Requester</th><th>Approver</th></tr></thead>
+  <tbody>
+  {% for a in recent %}
+    <tr>
+      <td class="muted small">{{ (a.decided_at or a.created_at)|dt }}</td>
+      <td class="mono">{{ a.email }}</td>
+      <td>{{ a.action }}</td>
+      <td>
+        {% if a.state == 'executed' %}<span class="pill ok">executed</span>
+        {% elif a.state == 'rejected' %}<span class="pill err">rejected</span>
+        {% else %}<span class="pill">pending</span>{% endif %}
+      </td>
+      <td class="mono small">{{ a.requester }}</td>
+      <td class="mono small">{{ a.approver or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Flagged Users</h1>
+  <form method="post" action="/scan"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn">Re-scan</button></form>
+</div>
+
+{% if not enabled %}
+<div class="flash warn">No remediation actions are enabled. Turn them on in <a href="/settings">Settings</a> to act on exposures.</div>
+{% endif %}
+
+<div class="flash {% if kill_switch %}err{% elif mode == 'auto' %}warn{% else %}info{% endif %}">
+  Remediation mode: <b>{{ mode }}</b>
+  {% if mode == 'auto' %}{% if dry_run %} · <b>DRY-RUN</b> (logs intended actions, executes nothing){% else %} · executes automatically on scan (gated){% endif %}{% endif %}
+  {% if mode == 'semi_auto' %} · one-click apply per user{% endif %}
+  {% if kill_switch %} · <b>KILL-SWITCH ACTIVE</b> — all autonomous actions halted{% endif %}
+  {% if close_alarm %}
+  <span title="When a remediation succeeds, this connector resolves the originating SOCRadar alarm(s) for that user — Incident V4, status set to RESOLVED. Turn off CLOSE_SOCRADAR_ALARM to manage alarm status yourself.">
+    · a successful action marks the related SOCRadar alarm <b>RESOLVED</b> ⓘ</span>
+  {% endif %}
+</div>
+
+{% if rows %}
+<table class="grid">
+  <thead><tr><th>Email</th><th>Sources</th><th>Directory</th><th>Status</th><th>Last seen</th><th>Action</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="mono">{{ r.email }}</td>
+      <td>{% for s in r.sources_list %}<span class="badge {{ s }}">{{ s }}</span>{% endfor %}</td>
+      <td>
+        {% if r.lookup_status == 'found' %}<span class="pill ok">found</span>
+        {% elif r.lookup_status == 'not_found' %}<span class="pill">not in dir</span>
+        {% elif r.lookup_status == 'permission_denied' %}<span class="pill warn">403 denied</span>
+        {% else %}<span class="pill err">{{ r.lookup_status }}</span>{% endif %}
+      </td>
+      <td>
+        {% if r.status == 'remediated' %}<span class="pill ok">remediated</span>
+        {% elif r.status == 'partial' %}<span class="pill warn">partial</span>
+        {% else %}<span class="pill">open</span>{% endif %}
+      </td>
+      <td class="muted small">{{ r.last_seen|dt }}</td>
+      <td>
+        {% if r.email == admin_subject %}
+          <span class="muted small">operator (excluded)</span>
+        {% elif r.status != 'remediated' and r.lookup_status == 'found' %}
+          {% if mode == 'semi_auto' and enabled %}
+          <form method="post" action="/flagged/{{ r.id }}/auto-remediate" class="inline"
+                onsubmit="return confirm('Apply ALL enabled actions to {{ r.email }}?')">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="exp_tenant" value="{{ tenant.id }}">
+            <button class="btn danger small" type="submit">Remediate (all enabled)</button>
+          </form>
+          {% endif %}
+          {% for key, meta in actions.items() %}
+            {% if key in enabled %}
+            <form method="post" action="/flagged/{{ r.id }}/remediate" class="inline"
+                  onsubmit="return confirm('{{ meta.label }} for {{ r.email }}?')">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input type="hidden" name="exp_tenant" value="{{ tenant.id }}">
+              <input type="hidden" name="action" value="{{ key }}">
+              <button class="btn danger small" type="submit">{{ meta.label }}</button>
+            </form>
+            {% endif %}
+          {% endfor %}
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No flagged users yet. Run a scan from the Dashboard.</p>
+{% endif %}
+{% endblock %}

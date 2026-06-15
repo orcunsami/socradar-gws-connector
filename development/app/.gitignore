@@ -1,0 +1,19 @@
+# Secrets / local state — never commit (mirrors the root .gitignore so this dir is safe
+# even if it is ever extracted into its own standalone repo)
+.env
+*.env
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+service-account*.json
+*.creds
+*.key
+*.local.*
+*.tfvars
+*.tfstate
+*.tfstate.*
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

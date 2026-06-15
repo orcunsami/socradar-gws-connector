@@ -1,0 +1,7 @@
+# Terraform state + var files carry secrets (feed_api_key, secret_key) in PLAINTEXT — never commit.
+*.tfvars
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log

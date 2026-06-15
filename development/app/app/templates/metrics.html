@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><h1>Metrics</h1></div>
+
+<div class="flash info">
+  Measure-what-matters: detection→remediation dwell time, coverage, remediation success, scan freshness,
+  audit integrity, and behavioral anomalies. (<a href="/metrics.json">JSON</a>)
+</div>
+
+{% macro secs(s) -%}
+  {% if s is none %}—{% elif s < 120 %}{{ '%.0f'|format(s) }}s{% elif s < 7200 %}{{ '%.0f'|format(s/60) }}m{% else %}{{ '%.1f'|format(s/3600) }}h{% endif %}
+{%- endmacro %}
+
+<table class="grid">
+  <tbody>
+    <tr><td>Flagged total</td><td class="mono">{{ m.flagged_total }}</td></tr>
+    <tr><td>Open / Remediated / Partial</td><td class="mono">{{ m.counts.open }} / {{ m.counts.remediated }} / {{ m.counts.partial }}</td></tr>
+    <tr><td>Coverage (handled / detected)</td><td class="mono">{% if m.coverage is none %}—{% else %}{{ '%.0f'|format(m.coverage*100) }}%{% endif %}</td></tr>
+    <tr><td>Dwell time p50 / p95 (detection→remediation)</td><td class="mono">{{ secs(m.dwell_seconds.p50) }} / {{ secs(m.dwell_seconds.p95) }} <span class="muted small">(n={{ m.dwell_seconds.n }})</span></td></tr>
+    <tr><td>Remediation success rate</td><td class="mono">{% if m.remediation_success_rate is none %}—{% else %}{{ '%.0f'|format(m.remediation_success_rate*100) }}%{% endif %} <span class="muted small">({{ m.remediation_attempts }} attempts)</span></td></tr>
+    <tr><td>Last scan age (freshness)</td><td class="mono">{{ secs(m.last_scan_age_seconds) }}</td></tr>
+    <tr><td>Audit chain integrity</td><td>
+      {% if m.audit_integrity.ok %}<span class="pill ok">verified ({{ m.audit_integrity.count }})</span>
+      {% else %}<span class="pill err">TAMPERED — {{ m.audit_integrity.reason }} @ {{ m.audit_integrity.broken_at }}</span>{% endif %}
+    </td></tr>
+    <tr><td>Anomalies (recent)</td><td>
+      {% if m.anomalies_recent %}<span class="pill warn">{{ m.anomalies_recent }}</span>
+        {% if m.last_anomaly %}<span class="muted small"> last: {{ m.last_anomaly.detail }}</span>{% endif %}
+      {% else %}<span class="pill ok">none</span>{% endif %}
+    </td></tr>
+  </tbody>
+</table>
+{% endblock %}

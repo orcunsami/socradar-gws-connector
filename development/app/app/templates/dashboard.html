@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Dashboard</h1>
+  <form method="post" action="/scan" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Scanning…'">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn primary" type="submit">Run scan now</button>
+  </form>
+</div>
+
+<div class="cards">
+  <div class="card"><div class="num">{{ counts.get('open', 0) }}</div><div class="lbl">Open exposures</div></div>
+  <div class="card"><div class="num good">{{ counts.get('remediated', 0) }}</div><div class="lbl">Remediated</div></div>
+  <div class="card"><div class="num">{{ totals.get('botnet', 0) }}</div><div class="lbl">Botnet (feed total)</div></div>
+  <div class="card"><div class="num">{{ totals.get('pii', 0) }}</div><div class="lbl">PII (feed total)</div></div>
+  <div class="card"><div class="num">{{ totals.get('vip', 0) }}</div><div class="lbl">VIP (alarm only)</div></div>
+</div>
+
+<div class="panel">
+  <h2>Last scan</h2>
+  {% if last %}
+  <table class="kv">
+    <tr><th>Started</th><td>{{ last.started_at|dt }}</td></tr>
+    <tr><th>Finished</th><td>{{ last.finished_at|dt if last.finished_at else '—' }}</td></tr>
+    <tr><th>Unique leaked emails</th><td>{{ last.unique_emails }}</td></tr>
+    <tr><th>In-scope & found in directory</th><td>{{ last.found_count }}</td></tr>
+    {% if last.error %}<tr><th>Error</th><td class="err-txt">{{ last.error }}</td></tr>{% endif %}
+  </table>
+  {% else %}<p class="muted">No scans yet. Click “Run scan now”.</p>{% endif %}
+</div>
+
+<div class="panel">
+  <h2>Feed configuration</h2>
+  <table class="kv">
+    <tr><th>Verified domains</th><td>{{ tenant.verified_domains }}</td></tr>
+    <tr><th>Feed</th><td>{{ tenant.feed_base }} · company {{ tenant.feed_company_id }} · since {{ tenant.feed_start_date }}</td></tr>
+    <tr><th>API key</th><td>{{ '•••• set' if tenant.feed_api_key else 'not set — add it in Settings' }}</td></tr>
+  </table>
+  <p class="muted small">VIP records carry a name only (no email), so they surface as alarms but are never remediated.</p>
+</div>
+{% endblock %}
