@@ -13,9 +13,21 @@ You will:
 
 Click **Start** to begin.
 
+## See what you need (one helper)
+
+Not sure of your project id, billing, or domain? Run this one helper. It prints your account, your projects,
+billing status, and exactly what to put in the config. You do not need to know any gcloud commands:
+
+```sh
+bash helper/run_all_validations.sh
+```
+
+(Individually: `bash helper/list_project_ids.sh` lists your projects; `bash helper/check_billing.sh PROJECT_ID`
+checks billing for one.)
+
 ## Pick your project
 
-Choose the Google Cloud project to deploy into, then set it:
+Choose a project id from the helper output and set it:
 
 ```sh
 gcloud config set project YOUR_PROJECT_ID
