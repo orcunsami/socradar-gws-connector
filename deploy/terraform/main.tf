@@ -22,6 +22,7 @@ locals {
     "secretmanager.googleapis.com",
     "iamcredentials.googleapis.com", # signJwt (keyless DWD) — NOT legacy iam.googleapis.com
     "admin.googleapis.com",          # Admin SDK Directory (no standalone directory.googleapis.com)
+    "cloudscheduler.googleapis.com", # scan-job.tf: Cloud Scheduler trigger for the scan Job
   ]
 }
 
@@ -46,7 +47,9 @@ resource "google_service_account_iam_member" "self_token_creator" {
 
 resource "google_secret_manager_secret" "feed_key" {
   secret_id  = "socradar-feed-key"
-  replication { auto {} } # Cloud Run has no regional secrets — global/auto required
+  replication {
+    auto {}
+  } # Cloud Run has no regional secrets — global/auto required
   depends_on = [google_project_service.apis]
 }
 
@@ -65,7 +68,9 @@ resource "google_secret_manager_secret_iam_member" "accessor" {
 # Tamper-evident audit HMAC key — off-box in Secret Manager (posture parity with the bash deploy).
 resource "google_secret_manager_secret" "audit_hmac" {
   secret_id  = "audit-hmac-key"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   depends_on = [google_project_service.apis]
 }
 
@@ -91,29 +96,93 @@ resource "google_cloud_run_v2_service" "connector" {
     service_account = google_service_account.runtime.email
     containers {
       image = var.image
-      env { name = "SERVICE_ACCOUNT"    value = google_service_account.runtime.email }
-      env { name = "ADMIN_SUBJECT"       value = var.admin_subject }
-      env { name = "ALLOWED_DOMAIN"      value = var.domain }
-      env { name = "DEFAULT_DOMAIN"      value = var.domain }
-      env { name = "DEFAULT_CUSTOMER_ID" value = var.customer_id }
-      env { name = "FEED_BASE"           value = var.feed_base }
-      env { name = "FEED_COMPANY_ID"     value = var.feed_company_id }
-      env { name = "DB_PATH"             value = "/tmp/app.sqlite3" }
-      env { name = "SECRET_KEY"          value = var.secret_key }
+      # HCL: a single-line block may hold only ONE argument; each env is multi-line (name + value).
+      env {
+        name  = "SERVICE_ACCOUNT"
+        value = google_service_account.runtime.email
+      }
+      env {
+        name  = "ADMIN_SUBJECT"
+        value = var.admin_subject
+      }
+      env {
+        name  = "ALLOWED_DOMAIN"
+        value = var.domain
+      }
+      env {
+        name  = "DEFAULT_DOMAIN"
+        value = var.domain
+      }
+      env {
+        name  = "DEFAULT_CUSTOMER_ID"
+        value = var.customer_id
+      }
+      env {
+        name  = "FEED_BASE"
+        value = var.feed_base
+      }
+      env {
+        name  = "FEED_COMPANY_ID"
+        value = var.feed_company_id
+      }
+      env {
+        name  = "DB_PATH"
+        value = "/tmp/app.sqlite3"
+      }
+      env {
+        name  = "SECRET_KEY"
+        value = var.secret_key
+      }
       # env-var parity with deploy-to-gcp.sh (audit P2: both paths must produce the same revision config)
-      env { name = "STORAGE_BACKEND"     value = var.storage_backend }
-      env { name = "PROJECT_ID"          value = var.project_id }
-      env { name = "AUTO_RATE_LIMIT_PER_HOUR" value = tostring(var.auto_rate_limit_per_hour) }
-      env { name = "ANALYTICS_BIGQUERY"  value = tostring(var.analytics_bigquery) }
-      env { name = "BIGQUERY_LOCATION"   value = var.region }
-      env { name = "CLOSE_SOCRADAR_ALARM" value = tostring(var.close_socradar_alarm) }
+      env {
+        name  = "STORAGE_BACKEND"
+        value = var.storage_backend
+      }
+      env {
+        name  = "PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "AUTO_RATE_LIMIT_PER_HOUR"
+        value = tostring(var.auto_rate_limit_per_hour)
+      }
+      env {
+        name  = "ANALYTICS_BIGQUERY"
+        value = tostring(var.analytics_bigquery)
+      }
+      env {
+        name  = "BIGQUERY_LOCATION"
+        value = var.region
+      }
+      env {
+        name  = "CLOSE_SOCRADAR_ALARM"
+        value = tostring(var.close_socradar_alarm)
+      }
       # security posture parity with deploy-to-gcp.sh (audit P1: Terraform must NOT ship a weaker config)
-      env { name = "APP_ENV"             value = "prod" }
-      env { name = "REQUIRE_APPROVAL"    value = "true" }
-      env { name = "REMEDIATION_ADMINS"  value = var.remediation_admins }
-      env { name = "GOOGLE_CLIENT_ID"    value = var.google_client_id }
-      env { name = "GOOGLE_CLIENT_SECRET" value = var.google_client_secret }
-      env { name = "SCAN_TRIGGER_TOKEN"  value = var.scan_trigger_token }
+      env {
+        name  = "APP_ENV"
+        value = "prod"
+      }
+      env {
+        name  = "REQUIRE_APPROVAL"
+        value = "true"
+      }
+      env {
+        name  = "REMEDIATION_ADMINS"
+        value = var.remediation_admins
+      }
+      env {
+        name  = "GOOGLE_CLIENT_ID"
+        value = var.google_client_id
+      }
+      env {
+        name  = "GOOGLE_CLIENT_SECRET"
+        value = var.google_client_secret
+      }
+      env {
+        name  = "SCAN_TRIGGER_TOKEN"
+        value = var.scan_trigger_token
+      }
       env {
         name = "FEED_API_KEY"
         value_source {

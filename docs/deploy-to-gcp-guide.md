@@ -75,12 +75,29 @@ The script prints the SA's **`oauth2ClientId`** and the scope list. In `admin.go
 ### Least-privilege subject (recommended)
 Authorizing DWD (above) is a one-time **super-admin** action. But the account the connector *impersonates*
 on every call (`admin_subject`) does NOT have to be — and shouldn't be — a super admin. Create a dedicated
-admin (e.g. `connector-bot@your-domain.com`) with a **custom admin role** holding only: **User Security
-Management** (signOut / turn off 2SV / revoke OAuth tokens / revoke app passwords), **Reset Password** and
-**Suspend Users** (sub-privileges under *Users*), and **group membership** (under *Groups*). Set that account
-as the subject. Limitation: a custom-role subject **cannot act on another admin account** (the Admin SDK
-403s); the connector detects admin targets (`isAdmin`/`isDelegatedAdmin`) and refuses them with a clear
-status instead of a silent 403. To remediate an admin target you'd need a super-admin subject + manual review.
+admin (e.g. `connector-bot@your-domain.com`) with a **custom admin role** holding **exactly** these privileges
+(Admin console **display name** → Admin SDK **API constant** — give the admin both so they can match the checkboxes):
+
+| Need | Admin console privilege | API constant |
+|------|-------------------------|--------------|
+| Read users (scan/lookup) — **REQUIRED, nothing works without it** | Users → Read | `USERS_RETRIEVE` |
+| Read org units (companion to user/security actions) | Organizational Units → Read | `ORGANIZATION_UNITS_RETRIEVE` |
+| signOut / turn off 2SV / revoke OAuth tokens / revoke app-passwords | User Security Management | `USER_SECURITY_ALL` |
+| reset password | Users → Reset Password | `USERS_RESET_PASSWORD` |
+| force change at next login | Users → Force Password Change | `USERS_FORCE_PASSWORD_CHANGE` |
+| suspend + unsuspend | Users → Suspend Users | `USERS_SUSPEND` |
+| add/remove from quarantine group | Groups (member management) | `GROUPS_ALL` |
+
+Set that account as the subject. Two hard limits (both Google-enforced, primary-source verified):
+- A custom-role subject **cannot act on another admin account** (the Admin SDK 403s, even read-only); the
+  connector detects admin targets (`isAdmin`/`isDelegatedAdmin`) and refuses them. To remediate a *compromised
+  admin* you need a **super-admin subject + manual review**.
+- `turn off 2SV` (per-user) is delegable, but **org-wide 2SV enforcement** and the **disable-2SV action cannot
+  be scoped to specific OUs** — only super-admins enforce 2SV org-wide.
+
+> Source: Google "Administrator privilege definitions" (support.google.com/a/answer/1219251) + independent
+> review (arastirma9 §B/§C). The earlier draft listed only display names and **omitted the read privileges** —
+> a role without `USERS_RETRIEVE` would fail at runtime (the connector can't even read the directory).
 
 ## Step 3 — Use it
 - The service is **private** (`--no-allow-unauthenticated`). Open the admin UI locally:

@@ -26,6 +26,7 @@ importlib.reload(auth)
 import app.connector as connector
 connector.get_dwd_token = lambda scopes, **kw: "tok"
 connector.apply_action = lambda action, email, token, group=None: True
+connector.is_admin = lambda email, token: False   # non-admin target (admin-safeguard now fail-closed — GAP2)
 import app.db as db
 importlib.reload(db)
 import app.main as main

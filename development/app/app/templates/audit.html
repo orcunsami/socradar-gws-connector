@@ -1,9 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Audit Log</h1>
+
+{% set result_meaning = {
+  'ok': 'The action succeeded.',
+  'alert': 'Security-significant — needs a human look (admin target, 2SV downgrade, incomplete pairing, feed truncated, anomaly, or a broken audit chain).',
+  'blocked': 'Refused by a safety gate BEFORE running (not a remediation admin, action not enabled, operator/admin excluded, out of verified domains, or needs approval).',
+  'warning': 'Non-fatal note (e.g. all lookups returned 403 = domain-wide delegation not authorized yet; or multi-tenant with no per-org admin).',
+  'error': 'A technical/exception failure (the feed or a Google API call raised).',
+  'fail': 'The Google API call ran but reported failure.',
+  'partial': 'Done in part only — e.g. the password reset succeeded but the token/ASP revoke failed (tokens may still be live).',
+  'pending': 'Queued for a second admin to approve (two-person rule).',
+  'rejected': 'A second admin rejected the approval request.',
+  'dryrun': 'Auto dry-run — the action was logged, not executed.',
+  'skipped': 'Auto mode skipped it (a pre-baseline finding or a guardrail).',
+  'tripped': 'Circuit breaker — the hourly auto-action rate limit was hit and the run halted.'
+} %}
+
+<details class="legend">
+  <summary>What do these columns and codes mean?</summary>
+  <div class="legend-body">
+    <p><b>Time</b> — when it happened. &nbsp; <b>Actor</b> — who/what did it: an operator's email,
+      <code>auto</code> (the autonomous engine), or <code>scheduler</code> (the periodic Cloud Scheduler scan).
+      &nbsp; <b>Action</b> — what was attempted: <code>scan</code>, <code>remediate:&lt;action&gt;</code>,
+      <code>paired:&lt;action&gt;</code> (a security follow-up such as revoking tokens after a reset),
+      <code>verify:&lt;action&gt;</code> (re-reads the directory to confirm the effect landed),
+      <code>approval_*</code>, <code>settings</code>, <code>tenant_create</code>.
+      &nbsp; <b>Target</b> — the affected user's email (— when there isn't one).</p>
+    <p><b>Result</b> codes:</p>
+    <ul class="legend-codes">
+      {% for code, meaning in result_meaning.items() %}
+      <li>
+        {% if code == 'ok' %}<span class="pill ok">ok</span>
+        {% elif code in ('blocked','warning','pending','dryrun','skipped','partial') %}<span class="pill warn">{{ code }}</span>
+        {% else %}<span class="pill err">{{ code }}</span>{% endif %}
+        <span class="muted small">{{ meaning }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p><b>Detail</b> on a <code>scan</code> row reads like
+      <code>totals={'botnet': 1, 'pii': 3} processed={...} in_scope=4 found=4</code>:</p>
+    <ul class="legend-codes">
+      <li><b>totals</b> — leaked records the feed returned, per source (botnet / pii / vip).</li>
+      <li><b>processed</b> — how many were actually read (smaller than totals only when the feed was truncated).</li>
+      <li><b>in_scope</b> — of the unique emails, how many fall inside your verified domains (the rest are skipped — a cross-domain lookup returns 403, not 404).</li>
+      <li><b>found</b> — of the in-scope emails, how many actually exist in your Workspace directory → these become Flagged Users.</li>
+      <li><b>TRUNCATED=[…]</b> — the feed had more pages than the page limit; raise FEED_MAX_PAGES or narrow the window so coverage isn't silently partial.</li>
+    </ul>
+  </div>
+</details>
+
 {% if rows %}
 <table class="grid">
-  <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Result</th><th>Detail</th></tr></thead>
+  <thead><tr>
+    <th title="When the event happened">Time</th>
+    <th title="Who or what performed it: an operator email, auto, or scheduler">Actor</th>
+    <th title="What was attempted">Action</th>
+    <th title="The affected user's email">Target</th>
+    <th title="Outcome — see the legend above">Result</th>
+    <th title="Context, error, or the scan's counts">Detail</th>
+  </tr></thead>
   <tbody>
   {% for r in rows %}
     <tr>
@@ -12,9 +68,9 @@
       <td><span class="badge">{{ r.action }}</span></td>
       <td class="mono small">{{ r.target_email or '—' }}</td>
       <td>
-        {% if r.result == 'ok' %}<span class="pill ok">ok</span>
-        {% elif r.result == 'blocked' %}<span class="pill warn">blocked</span>
-        {% else %}<span class="pill err">{{ r.result }}</span>{% endif %}
+        {% if r.result == 'ok' %}<span class="pill ok" title="{{ result_meaning.get('ok','') }}">ok</span>
+        {% elif r.result in ('blocked','warning','pending','dryrun','skipped','partial') %}<span class="pill warn" title="{{ result_meaning.get(r.result,'') }}">{{ r.result }}</span>
+        {% else %}<span class="pill err" title="{{ result_meaning.get(r.result, 'Outcome code') }}">{{ r.result }}</span>{% endif %}
       </td>
       <td class="muted small">{{ r.detail or '' }}</td>
     </tr>

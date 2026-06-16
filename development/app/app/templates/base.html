@@ -13,16 +13,16 @@
   <nav>
     <a href="/">Dashboard</a>
     <a href="/flagged">Flagged Users</a>
-    <a href="/approvals">Approvals</a>
-    <a href="/metrics">Metrics</a>
+    <a href="/scans">Scans</a>
+    {% if require_approval %}<a href="/approvals">Approvals</a>{% endif %}
     <a href="/settings">Settings</a>
     <a href="/audit">Audit</a>
-    <a href="/tenants">Tenants</a>
+    {% if all_tenants and all_tenants|length > 1 %}<a href="/tenants">Tenants</a>{% endif %}
   </nav>
   {% if all_tenants and all_tenants|length > 1 %}
   <form method="post" action="/tenants/switch" class="tenant-switch">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <select name="tenant_id" onchange="this.form.submit()" title="Active tenant">
+    <select name="tenant_id" data-autosubmit title="Active tenant">
       {% for t in all_tenants %}
       <option value="{{ t.id }}" {% if active_tenant and t.id == active_tenant.id %}selected{% endif %}>{{ t.name }}</option>
       {% endfor %}
@@ -35,6 +35,8 @@
 <main class="container">
   {% set q = request.query_params %}
   {% if q.get('scan_ok') %}<div class="flash ok">Scan completed — see Flagged Users.</div>{% endif %}
+  {% if q.get('scan_more') %}<div class="flash info">Scan is in progress — a large feed is processed in batches. Watch <a href="/scans">Scans</a> for progress; flagged users appear here as it completes.</div>{% endif %}
+  {% if q.get('scan_busy') %}<div class="flash warn">A scan is already running for this tenant — see <a href="/scans">Scans</a> for its progress.</div>{% endif %}
   {% if q.get('scan_err') %}<div class="flash err">Scan failed — check Audit for the reason.</div>{% endif %}
   {% if q.get('rem_ok') %}<div class="flash ok">Remediation applied.</div>{% endif %}
   {% if q.get('rem_err') %}<div class="flash err">Remediation blocked or failed — check Audit.</div>{% endif %}
@@ -51,5 +53,20 @@
 <footer class="foot">
   v{{ version|default('') }} · Internal app · keyless domain-wide delegation{% if tenant is defined and tenant %} · tenant: {{ tenant.name }} ({{ tenant.customer_id }}){% endif %}
 </footer>
+
+<!-- Scan progress overlay. Shown by /static/app.js on any form marked data-scan; the scan is a blocking
+     request, so this tells the operator to wait here (it auto-navigates to Flagged Users when done). -->
+<div id="scan-overlay" hidden>
+  <div class="scan-box">
+    <div class="spinner" aria-hidden="true"></div>
+    <h2>Scanning…</h2>
+    <p>Reading the SOCRadar feed and checking each leaked email against your Workspace directory.</p>
+    <p class="muted small">This usually takes a few seconds — longer for a large feed or many domains.
+       Keep this tab open: you'll jump to <b>Flagged Users</b> automatically when it finishes.
+       Please don't refresh or click again.</p>
+  </div>
+</div>
+
+<script src="/static/app.js" defer></script>
 </body>
 </html>

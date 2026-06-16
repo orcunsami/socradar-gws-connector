@@ -1,6 +1,6 @@
 # SOCRadar Google Workspace Connector
 
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/orcunsami/socradar-gws-connector.git&cloudshell_workspace=.&cloudshell_tutorial=cloudshell-tutorial.md)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/open?cloudshell_git_repo=https://github.com/orcunsami/socradar-gws-connector&cloudshell_git_branch=master&cloudshell_workspace=.&cloudshell_open_in_editor=deploy/customer.env.example&cloudshell_tutorial=deploy/tutorial.md&show=ide%2Cterminal)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 Automated remediation for **leaked employee credentials** detected by SOCRadar. It pulls Botnet, PII Exposure, and VIP Protection alerts, finds the matching accounts in your Google Workspace, and runs the response actions you choose (revoke sessions, suspend, reset password, and more). Every action is written to a tamper evident audit log. If you turn on alarm close-back, the originating SOCRadar alarm is resolved too (off by default).
@@ -31,15 +31,21 @@ Workspace  (HMAC chain, off-box mirror)
 
 Two ways. Most customers use the button.
 
-### Option 1: Open in Cloud Shell
+### Option 1: Open in Cloud Shell (recommended)
 
-Click the button at the top. Google Cloud Shell opens in your browser with this repository cloned and a step-by-step tutorial in the side panel. No local install. The tutorial walks you through setting your project, creating the sign-in OAuth client, and running the deploy.
+Click the button at the top. Google Cloud Shell opens in your browser, this repository cloned, `deploy/customer.env.example` already open in the editor, and a step-by-step tutorial in the side panel. No local install.
 
-The deploy (`deploy/deploy-to-gcp.sh`) enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation, stores the feed key and the audit key in Secret Manager, deploys a private Cloud Run service, and creates the periodic-scan scheduler job. At the end it prints the service account client id.
+The flow is one config file and one command:
+
+1. Run `bash deploy/setup.sh` once. It creates your private `deploy/customer.env` (git-ignored) and opens it.
+2. Fill in your project, domain, impersonation admin, and SOCRadar feed key. Save.
+3. Run `bash deploy/setup.sh` again. It validates everything and deploys.
+
+Under the hood the deploy enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation, stores the feed key and the audit key in Secret Manager, deploys a private Cloud Run service, and creates the periodic-scan scheduler job. At the end it prints the service account client id.
 
 One manual step remains: your Workspace super admin authorizes that client id for the four directory scopes in `admin.google.com`, their own way.
 
-### Option 2: One script (Secret Manager)
+### Option 2: One script (manual env vars)
 
 ```bash
 PROJECT=your-gcp-project \

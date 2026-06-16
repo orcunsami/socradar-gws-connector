@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # connector identity (keyless DWD). On Cloud Run, auth is the ambient metadata token (gcloud_path unused).
     gcloud_path: str = "gcloud"                   # local-dev fallback only; resolved from PATH
     service_account: str = ""                     # the DWD-authorized runtime SA (set at deploy)
-    admin_subject: str = ""                       # super-admin to impersonate + remediation-excluded operator
+    admin_subject: str = ""                       # least-priv custom-role admin to impersonate (NOT super-admin) + remediation-excluded operator
 
     # default tenant bootstrap (set per customer at deploy)
     default_customer_id: str = "my_customer"      # Google's generic alias; or the immutable customerId
@@ -44,7 +44,14 @@ class Settings(BaseSettings):
     feed_start_date: str = "2026-06-01"          # fixed fallback start date (used only if lookback_days=0)
     feed_lookback_days: int = 0                   # >0 = relative window: scan from (today - N days). 0 = fixed date.
     feed_page_limit: int = 100                    # records per feed page
-    feed_max_pages: int = 50                      # cap per source per scan (Entra-parity MaxPagesPerRun); if hit, scan reports truncated
+    feed_max_pages: int = 50                      # legacy per-source page cap; only used when feed_full_scan=False
+    # --- large-feed scan engine (ADR-0001) ---
+    feed_full_scan: bool = True                   # True = page the WHOLE window (no 5,000 truncation), streaming + early-filter
+    feed_overlap_days: int = 7                    # incremental: re-scan from (high_water - N days) so a boundary/backdated/late-ingested record is never missed (the feed's discovery-date can lag ingestion); idempotent upsert dedups the overlap, so a generous window is free correctness
+    scan_pages_per_run: int = 0                   # self-continuation budget: max feed pages processed per scan invocation (0 = unbounded; for a Cloud Run Job. Set >0 on a request-bound Service)
+    scan_lease_ttl: int = 1800                     # seconds; a 'running' scan whose heartbeat is older than this is a zombie (crash/SIGKILL) and is reclaimed+resumed. Generous so a slow page never false-reclaims a live scan (heartbeat is written every page)
+    scan_max_stuck_resumes: int = 3                 # a mid-scan feed error keeps the checkpoint + resumes; after this many resumes that made ZERO progress (a permanent error e.g. bad key / feed down) the scan finalizes as error instead of looping forever
+    feed_hard_page_cap: int = 100000                # absolute per-source page ceiling (~10M records) — a runaway-loop backstop if a feed never reports total_data_count and never returns an empty page
 
     # close-the-loop: after a Google remediation, resolve the originating SOCRadar alarm by alarm id
     # (Incident V4 /alarms/status/change — no operator email needed).
@@ -55,7 +62,10 @@ class Settings(BaseSettings):
     auto_enabled_actions: str = ""               # CSV allow-list of actions auto/semi may apply (suspend excluded)
     auto_dry_run: bool = True                     # auto mode: log intended action, DO NOT execute (until turned off)
     auto_kill_switch: bool = False                # true halts ALL autonomous actions immediately
-    auto_high_blast_actions: str = "suspend"     # CSV actions that NEVER auto-fire (always need a human)
+    auto_high_blast_actions: str = "suspend,disable_2sv"   # CSV actions that NEVER auto-fire (always need a human).
+    # disable_2sv is here because on a LEAKED-PASSWORD account it can be a NET SECURITY DOWNGRADE (strips all 2nd
+    # factors -> password-only unless 2SV is org-enforced). Only meaningful to remove an attacker-enrolled factor,
+    # paired with reset_password + re-enforcement — never an autonomous routine action.
     auto_max_users_per_scan: int = 5             # blast-radius cap per scan per tenant
     auto_exclude_users: str = ""                 # CSV VIP/break-glass emails never auto-actioned
     auto_rate_limit_per_hour: int = 20           # circuit breaker: max auto actions/hour/tenant (0 = off)

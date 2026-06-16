@@ -25,17 +25,29 @@ fi
 echo "==> Deleting Cloud Run service"
 $GC run services delete "$SERVICE" --region="$REGION" --project="$PROJECT" --quiet 2>/dev/null || echo "   (no service)"
 
+echo "==> Deleting Cloud Run JOB (Phase 2 scan job)"
+$GC run jobs delete gws-scan-job --region="$REGION" --project="$PROJECT" --quiet 2>/dev/null || echo "   (no scan job)"
+
 echo "==> Deleting feed key + audit-hmac secrets (irreversible — all versions)"
 $GC secrets delete socradar-feed-key --project="$PROJECT" --quiet 2>/dev/null || echo "   (no feed secret)"
 $GC secrets delete audit-hmac-key --project="$PROJECT" --quiet 2>/dev/null || echo "   (no audit-hmac secret)"
 
-echo "==> Deleting the source-build Artifact Registry repo (removes ALL build images + versions)"
-$GC artifacts repositories delete cloud-run-source-deploy \
-  --location="$REGION" --quiet --project="$PROJECT" 2>/dev/null \
-  || echo "   (no cloud-run-source-deploy repo)"
+echo "==> Deleting build-image Artifact Registry repos (removes ALL build images + versions)"
+# cloud-run-source-deploy = `gcloud run deploy --source` builds. gcr.io = the legacy gcr.io/PROJECT host
+# (Terraform/Marketplace path uses a prebuilt image often pushed here via `gcloud builds submit --tag gcr.io/...`).
+# Delete both; either may be absent depending on which deploy path was used.
+for repo in cloud-run-source-deploy gcr.io; do
+  $GC artifacts repositories delete "$repo" \
+    --location="$REGION" --quiet --project="$PROJECT" 2>/dev/null \
+    || echo "   (no $repo repo in $REGION)"
+done
+# gcr.io images may also live in the multi-region 'us'/'eu' AR mirror — remove if present.
+for loc in us eu; do
+  $GC artifacts repositories delete gcr.io --location="$loc" --quiet --project="$PROJECT" 2>/dev/null || true
+done
 
 echo "==> Deleting Cloud Scheduler jobs (the automated scan + the daily audit-verify triggers)"
-for job in gws-scan gws-verify-audit; do
+for job in gws-scan gws-verify-audit gws-scan-job-trigger; do
   $GC scheduler jobs delete "$job" --location="$REGION" --quiet --project="$PROJECT" 2>/dev/null \
     || echo "   (no $job job)"
 done

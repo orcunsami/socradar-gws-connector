@@ -17,6 +17,7 @@ Safety invariants enforced here (see EXP-GOOGLE-0003/0005/0009):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import secrets
@@ -27,6 +28,8 @@ import urllib.parse
 import urllib.request
 
 from .config import settings
+
+log = logging.getLogger("socradar.gws.connector")
 
 DIRECTORY = "https://admin.googleapis.com/admin/directory/v1"
 # Scopes (all SENSITIVE, none restricted → no CASA). Each action requests only the one it needs;
@@ -44,16 +47,51 @@ SOC_SOURCES = {
 
 # Remediation action catalog (Entra parity). All gated by per-tenant toggles (default OFF).
 # needs_group=True actions require the tenant's quarantine_group to be set.
+# Each action carries `help` (what it does / when to reach for it / its blast radius). The Settings UI
+# surfaces this so an operator can tell the actions apart. Gating (which need a 2nd-admin approval, which
+# never auto-fire, which auto-pair) is derived from config at render time, not hard-coded here.
 ACTIONS = {
-    "signout":           {"label": "Revoke sessions (signOut)",        "scope": SCOPE_SECURITY, "destructive": True,  "needs_group": False},
-    "reset_password":    {"label": "Reset password (force change)",    "scope": SCOPE_USER,     "destructive": True,  "needs_group": False},
-    "suspend":           {"label": "Suspend account",                  "scope": SCOPE_USER,     "destructive": True,  "needs_group": False},
-    "unsuspend":         {"label": "Restore account (un-suspend)",      "scope": SCOPE_USER,     "destructive": False, "needs_group": False},
-    "disable_2sv":       {"label": "Turn off 2-Step Verification",     "scope": SCOPE_SECURITY, "destructive": True,  "needs_group": False},
-    "revoke_tokens":     {"label": "Revoke 3rd-party OAuth tokens",    "scope": SCOPE_SECURITY, "destructive": True,  "needs_group": False},
-    "revoke_asps":       {"label": "Revoke app-specific passwords",    "scope": SCOPE_SECURITY, "destructive": True,  "needs_group": False},
-    "add_to_group":      {"label": "Add to quarantine group",          "scope": SCOPE_GROUP,    "destructive": True,  "needs_group": True},
-    "remove_from_group": {"label": "Remove from quarantine group",     "scope": SCOPE_GROUP,    "destructive": False, "needs_group": True},
+    "signout": {"label": "Revoke sessions (signOut)", "scope": SCOPE_SECURITY, "destructive": True, "needs_group": False,
+        "short": "Ends all active sessions. No password change.",
+        "help": "Ends every active web/mobile session and forces a fresh sign-in. Does NOT change the password or "
+                "disable the account. The fastest first move on any leaked account: cuts a live attacker session "
+                "in seconds. Often paired with reset_password."},
+    "reset_password": {"label": "Reset password (force change)", "scope": SCOPE_USER, "destructive": True, "needs_group": False, "pairs": ["revoke_tokens", "revoke_asps"],
+        "short": "New password + revokes tokens & app-passwords.",
+        "help": "Sets a random password and forces a change at next login: the core fix when THE PASSWORD leaked. "
+                "Auto-pairs with revoke OAuth tokens + app-passwords (a bare reset doesn't kill those, so an attacker "
+                "could stay in). High-blast: needs a second-admin approval when approvals are on."},
+    "suspend": {"label": "Suspend account", "scope": SCOPE_USER, "destructive": True, "needs_group": False,
+        "short": "Fully disables the account (can't sign in).",
+        "help": "Fully disables the account: the user cannot sign in at all (strongest containment). For a confirmed "
+                "compromise where you want it frozen, not just logged out. Locks the real user out too. High-blast: "
+                "needs approval and NEVER fires automatically."},
+    "unsuspend": {"label": "Restore account (un-suspend)", "scope": SCOPE_USER, "destructive": False, "needs_group": False,
+        "short": "Re-enables a suspended account.",
+        "help": "Recovery action: re-enables a previously suspended account. Safe (non-destructive). Use after a "
+                "false positive or once the incident is cleared."},
+    "disable_2sv": {"label": "Turn off 2-Step Verification", "scope": SCOPE_SECURITY, "destructive": True, "needs_group": False,
+        "short": "Turns off 2FA. A downgrade if used alone.",
+        "help": "Removes ALL second factors. WARNING: on a leaked-PASSWORD account this is a SECURITY DOWNGRADE if "
+                "used alone (the account becomes password-only, and the attacker knows the password). Only to strip an "
+                "attacker-enrolled factor, and always pair with reset_password + re-enforce 2SV. Needs approval, never auto."},
+    "revoke_tokens": {"label": "Revoke 3rd-party OAuth tokens", "scope": SCOPE_SECURITY, "destructive": True, "needs_group": False,
+        "short": "Revokes 3rd-party OAuth app access.",
+        "help": "Revokes every 3rd-party app's OAuth access (Gmail/Drive grants etc.): closes the door a password reset "
+                "alone leaves open. Runs automatically as part of reset_password; enable standalone to revoke app access "
+                "without resetting the password."},
+    "revoke_asps": {"label": "Revoke app-specific passwords", "scope": SCOPE_SECURITY, "destructive": True, "needs_group": False,
+        "short": "Revokes app-specific passwords (legacy clients).",
+        "help": "Revokes all app-specific passwords (legacy IMAP/SMTP clients that bypass 2SV). Also runs automatically "
+                "with reset_password: those credentials survive a normal reset otherwise."},
+    "add_to_group": {"label": "Add to quarantine group", "scope": SCOPE_GROUP, "destructive": True, "needs_group": True,
+        "short": "Adds to your quarantine group (tighter policy).",
+        "help": "Adds the user to your quarantine Google Group so group-scoped policies (tighter DLP, blocked external "
+                "sharing) apply. Requires a quarantine group set in Settings. Containment without locking the account out."},
+    "remove_from_group": {"label": "Remove from quarantine group", "scope": SCOPE_GROUP, "destructive": False, "needs_group": True,
+        "short": "Removes from the quarantine group.",
+        "help": "Recovery action: removes the user from the quarantine group once the incident is cleared. Safe "
+                "(non-destructive). Requires a quarantine group set in Settings."},
 }
 
 # The full minimal scope set the DWD client must be authorized for (union of all actions + lookup).
@@ -204,6 +242,54 @@ def socradar_fetch(base, company_id, api_key, source, start_date, limit=None, ma
     return out, total, processed, truncated
 
 
+def stream_source(base, company_id, api_key, source, start_date, start_page=1, page_limit=None):
+    """Streaming generator over ONE feed source (ADR-0001): yields (page_no, records, total) page by page
+    from start_page, NEVER buffering the whole feed. `records` are sanitized ({email, source,
+    password_present, alarm_id}); only @-emails are kept. Pages until a page is empty or we've passed
+    total_data_count (NO 5,000-record truncation — the caller bounds the per-invocation budget). The
+    page-number cursor is safe for resume because the verified-domain filter + idempotent (tenant,email)
+    upsert make re-paging an overlap harmless (EXP-GOOGLE-0009: startDate is a discovery-date high-water mark)."""
+    limit = page_limit or settings.feed_page_limit
+    path = SOC_SOURCES[source]
+    url = f"{base}/api/company/{company_id}/{path}"
+    headers = {"API-Key": api_key, "Content-Type": "application/json", "User-Agent": "SOCRadar-GWS/1.0"}
+    page, total = start_page, 0
+    hard_cap = settings.feed_hard_page_cap or 10**9
+    while True:
+        if page > hard_cap:        # runaway backstop: a feed that never reports total + never returns empty
+            log.warning("feed %s: hit hard page cap (%s) — stopping (coverage may be partial)", source, hard_cap)
+            break
+        q = urllib.parse.urlencode({"page": page, "limit": limit, "startDate": start_date})
+        try:
+            r = _get(url + "?" + q, headers)          # _get retries 429/5xx/transient + honors Retry-After
+        except urllib.error.HTTPError as e:
+            raise ConnectorError(f"feed {source} HTTP {e.code}: {e.read().decode()[:140]}") from e
+        if not isinstance(r, dict) or not r.get("is_success"):
+            raise ConnectorError(f"feed {source} bad response: {str(r)[:120]}")
+        payload = r.get("data") or {}
+        recs = payload.get("data") or []
+        if not isinstance(recs, list):
+            raise ConnectorError(f"feed {source} data not a list: {type(recs).__name__}")
+        total = payload.get("total_data_count", total)
+        if not recs:
+            break                                    # RAW-empty page = source exhausted -> stop BEFORE yielding
+        # `out` may be empty even though `recs` is not (a page of keyword-only / non-@ records, e.g. VIP brand
+        # monitors). We STILL yield it so the consumer advances the cursor past it and reaches later pages that
+        # DO carry @-emails — never treat a sanitized-empty page as end-of-source (that silently drops data).
+        out = []
+        for rec in recs:
+            email = (rec.get("email") or rec.get("user") or rec.get("keyword") or "").strip().lower()
+            if "@" not in email:
+                continue
+            out.append({"email": email, "source": source,
+                        "password_present": bool(rec.get("password")), "alarm_id": rec.get("alarmId")})
+        yield page, out, total
+        if total and page * limit >= total:
+            break                                    # paged past the reported total -> done (no extra fetch)
+        page += 1
+        time.sleep(0.5)                              # politeness between pages (feed 429 protection)
+
+
 def fetch_all_sources(base, company_id, api_key, start_date):
     """Returns (by_email: {email: set(sources)}, totals: {source: total}, alarms_by_email: {email:[alarmId]},
                coverage: {source: {processed, total, truncated}}). `coverage` lets the caller report
@@ -273,15 +359,19 @@ def lookup_user(email: str, token: str) -> str:
         return "error_transient"
 
 
-def is_admin(email: str, token: str) -> bool:
-    """Best-effort: is the target a Workspace admin (super or delegated)? Refuse remediation on an admin
-    account — a custom-role (non-super) subject 403s on admins anyway, and locking out IT is dangerous.
-    Returns False on ANY error (4xx/network): this is a pre-check; the action's own 403 is the real backstop."""
+def is_admin(email: str, token: str):
+    """Is the target a Workspace admin (super or delegated)? Three-state (arastirma9 §F1 — must FAIL CLOSED):
+      True  -> definitely an admin (refuse remediation)
+      False -> definitely NOT an admin (safe to proceed)
+      None  -> could NOT determine (caller must FAIL CLOSED, not silently proceed).
+    Refusing on admins matters because a custom-role (non-super) subject 403s on admins anyway, and locking
+    out IT is dangerous. A 403 on this readonly pre-check often MEANS the target is an admin a custom-role
+    can't read — so we return None (indeterminate -> refuse), never a false 'not an admin'."""
     try:
         u = _api("GET", f"{DIRECTORY}/users/{urllib.parse.quote(email)}?fields=isAdmin,isDelegatedAdmin", token)
         return bool(u.get("isAdmin") or u.get("isDelegatedAdmin"))
     except Exception:
-        return False
+        return None   # indeterminate — never collapse to False (that re-introduces the fail-open hole)
 
 
 def revoke_sessions(email: str, token: str) -> bool:

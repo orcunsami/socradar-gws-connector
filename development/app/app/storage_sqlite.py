@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     auto_baseline_at REAL NOT NULL DEFAULT 0,     -- never-auto-on-first-scan: 0=baseline not set yet
     admin_subject TEXT NOT NULL DEFAULT '',       -- MSSP: per-org super-admin to impersonate; '' = use global config
     service_account TEXT NOT NULL DEFAULT '',     -- MSSP: per-org DWD SA override; '' = use the shared global SA
+    feed_lookback_days INTEGER NOT NULL DEFAULT 0, -- rolling feed window preset (today-N); 0 = use the fixed feed_start_date
+    feed_high_water TEXT NOT NULL DEFAULT '',      -- incremental: next startDate (last fully-scanned discovery date); '' = backfill from scratch
     created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS flagged_users (
@@ -53,7 +55,11 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     totals TEXT,
     found_count INTEGER DEFAULT 0,
     unique_emails INTEGER DEFAULT 0,
-    error TEXT
+    error TEXT,
+    status TEXT NOT NULL DEFAULT 'done',           -- running | done | error (lease: 'running' + stale heartbeat = reclaimable)
+    cursor TEXT,                                    -- json {source: next_page, done:[sources]} for crash/budget resume
+    window_start TEXT,                             -- the startDate this scan paged from (resume re-derives the SAME window)
+    heartbeat REAL                                 -- last progress write; a 'running' row past the lease TTL is a zombie to reclaim
 );
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +121,17 @@ def init_schema():
             c.execute("ALTER TABLE tenants ADD COLUMN admin_subject TEXT NOT NULL DEFAULT ''")
         if "service_account" not in cols:
             c.execute("ALTER TABLE tenants ADD COLUMN service_account TEXT NOT NULL DEFAULT ''")
+        if "feed_lookback_days" not in cols:
+            c.execute("ALTER TABLE tenants ADD COLUMN feed_lookback_days INTEGER NOT NULL DEFAULT 0")
+        if "feed_high_water" not in cols:
+            c.execute("ALTER TABLE tenants ADD COLUMN feed_high_water TEXT NOT NULL DEFAULT ''")
+        scols = [r["name"] for r in c.execute("PRAGMA table_info(scan_runs)").fetchall()]
+        if "status" not in scols:
+            # existing finished rows are 'done'; an unfinished legacy row stays NULL->treated as not-running
+            c.execute("ALTER TABLE scan_runs ADD COLUMN status TEXT NOT NULL DEFAULT 'done'")
+        for col, ddl in (("cursor", "cursor TEXT"), ("window_start", "window_start TEXT"), ("heartbeat", "heartbeat REAL")):
+            if col not in scols:
+                c.execute(f"ALTER TABLE scan_runs ADD COLUMN {ddl}")
         fcols = [r["name"] for r in c.execute("PRAGMA table_info(flagged_users)").fetchall()]
         if "socradar_refs" not in fcols:
             c.execute("ALTER TABLE flagged_users ADD COLUMN socradar_refs TEXT NOT NULL DEFAULT '[]'")
@@ -185,23 +202,34 @@ def update_tenant(tenant_id, **fields):
 
 # ---------- flagged users ----------
 def upsert_flagged(tenant_id, email, sources, lookup_status, now, socradar_refs=None):
+    """Read-merge upsert under BEGIN IMMEDIATE (serialized like append_audit). On conflict it UNIONs sources
+    and socradar_refs instead of last-writer-wins (ADR-0001 #3: a streamed scan processes botnet/pii/vip in
+    separate pages/invocations, so the same email must accumulate its sources, not clobber the prior one).
+    Leaves status + first_seen untouched (a rescan must not reset a remediated finding or its detection time).
+    The per-tenant scan lease guarantees a single writer; BEGIN IMMEDIATE serializes any incidental overlap."""
     tid = _int(tenant_id)
-    refs = json.dumps(socradar_refs or [])
-    # Atomic upsert (single statement) — two concurrent scans of the same tenant must not race a
-    # SELECT-then-INSERT into a UNIQUE(tenant_id,email) IntegrityError. On conflict we refresh
-    # sources/lookup/last_seen/refs but DELIBERATELY leave status + first_seen untouched (a rescan must not
-    # reset a remediated/partial finding or overwrite its original detection time).
+    new_sources = set(sources)
+    new_refs = list(socradar_refs or [])
     with conn() as c:
-        row = c.execute(
+        c.execute("BEGIN IMMEDIATE")
+        ex = c.execute("SELECT id, sources, socradar_refs, lookup_status FROM flagged_users "
+                       "WHERE tenant_id=? AND email=?", (tid, email)).fetchone()
+        if ex:
+            merged_sources = sorted(new_sources | set(json.loads(ex["sources"] or "[]")))
+            old_refs = json.loads(ex["socradar_refs"] or "[]")
+            merged_refs = old_refs + [r for r in new_refs if r not in old_refs]
+            # don't let a TRANSIENT blip (error_*) un-'find' an already-found user (it would block remediation
+            # at the lookup_status!='found' gate). A definitive not_found/permission_denied still updates.
+            ls = "found" if (ex["lookup_status"] == "found" and str(lookup_status).startswith("error_")) else lookup_status
+            c.execute("UPDATE flagged_users SET sources=?, lookup_status=?, last_seen=?, socradar_refs=? WHERE id=?",
+                      (json.dumps(merged_sources), ls, now, json.dumps(merged_refs), ex["id"]))
+            return ex["id"]
+        cur = c.execute(
             """INSERT INTO flagged_users
                  (tenant_id, email, sources, lookup_status, status, first_seen, last_seen, socradar_refs)
-               VALUES (?,?,?,?, 'open', ?,?,?)
-               ON CONFLICT(tenant_id, email) DO UPDATE SET
-                 sources=excluded.sources, lookup_status=excluded.lookup_status,
-                 last_seen=excluded.last_seen, socradar_refs=excluded.socradar_refs
-               RETURNING id""",
-            (tid, email, json.dumps(sorted(sources)), lookup_status, now, now, refs)).fetchone()
-        return row["id"]
+               VALUES (?,?,?,?, 'open', ?,?,?)""",
+            (tid, email, json.dumps(sorted(new_sources)), lookup_status, now, now, json.dumps(new_refs)))
+        return cur.lastrowid
 
 
 def set_close_status(flagged_id, status_json):
@@ -275,15 +303,73 @@ def flagged_counts(tenant_id):
 def start_scan(tenant_id, now):
     tid = _int(tenant_id)
     with conn() as c:
-        cur = c.execute("INSERT INTO scan_runs (tenant_id, started_at) VALUES (?,?)", (tid, now))
+        cur = c.execute("INSERT INTO scan_runs (tenant_id, started_at, status, heartbeat) VALUES (?,?, 'running', ?)",
+                        (tid, now, now))
         return cur.lastrowid
 
 
-def finish_scan(scan_id, now, totals=None, found=0, unique=0, error=None):
+def finish_scan(scan_id, now, totals=None, found=0, unique=0, error=None, status=None):
+    st = status or ("error" if error else "done")
     with conn() as c:
-        c.execute("""UPDATE scan_runs SET finished_at=?, totals=?, found_count=?, unique_emails=?, error=?
+        c.execute("""UPDATE scan_runs SET finished_at=?, totals=?, found_count=?, unique_emails=?, error=?, status=?
                      WHERE id=?""",
-                  (now, json.dumps(totals or {}), found, unique, error, _int(scan_id)))
+                  (now, json.dumps(totals or {}), found, unique, error, st, _int(scan_id)))
+
+
+def claim_or_resume_scan(tenant_id, now, lease_ttl, window_start):
+    """Single-flight per tenant (ADR-0001 lease). Returns (scan_id, cursor_json_or_None, mode):
+    - 'busy'   : a 'running' row with a LIVE heartbeat (now-heartbeat < lease_ttl) — a worker is mid-scan.
+    - 'resume' : a 'paused' row (a budget self-continuation handoff) OR a 'running' row past the lease TTL
+                 (a zombie from a crash/SIGKILL/timeout) -> reclaim + resume from cursor.
+    - 'new'    : no active scan -> create a fresh 'running' row."""
+    tid = _int(tenant_id)
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT id, cursor, heartbeat, status FROM scan_runs "
+                        "WHERE tenant_id=? AND status IN ('running','paused') ORDER BY id DESC LIMIT 1",
+                        (tid,)).fetchone()
+        if row:
+            if row["status"] == "running" and now - (row["heartbeat"] or 0) < lease_ttl:
+                return None, None, "busy"
+            # paused (deliberate handoff) OR stale 'running' (zombie) -> take ownership + resume
+            c.execute("UPDATE scan_runs SET status='running', heartbeat=? WHERE id=?", (now, row["id"]))
+            return row["id"], row["cursor"], "resume"
+        cur = c.execute("INSERT INTO scan_runs (tenant_id, started_at, status, heartbeat, window_start) "
+                        "VALUES (?,?, 'running', ?, ?)", (tid, now, now, window_start))
+        return cur.lastrowid, None, "new"
+
+
+def pause_scan(scan_id, now, cursor):
+    """Budget self-continuation: checkpoint + hand off. status='paused' so the NEXT invocation resumes it
+    (a fresh-heartbeat 'running' would be mistaken for an active worker and refused as 'busy')."""
+    with conn() as c:
+        c.execute("UPDATE scan_runs SET status='paused', heartbeat=?, cursor=? WHERE id=?",
+                  (now, cursor, _int(scan_id)))
+
+
+def scan_heartbeat(scan_id, now, cursor=None, totals=None, found=None, unique=None):
+    """Progress write during a long scan: refresh the lease heartbeat + (optionally) the resume cursor and the
+    running tallies, so a reclaimed zombie resumes with accurate counts."""
+    sets, args = ["heartbeat=?"], [now]
+    if cursor is not None:
+        sets.append("cursor=?"); args.append(cursor)
+    if totals is not None:
+        sets.append("totals=?"); args.append(json.dumps(totals))
+    if found is not None:
+        sets.append("found_count=?"); args.append(found)
+    if unique is not None:
+        sets.append("unique_emails=?"); args.append(unique)
+    args.append(_int(scan_id))
+    with conn() as c:
+        c.execute(f"UPDATE scan_runs SET {', '.join(sets)} WHERE id=?", args)
+
+
+def get_active_scan(tenant_id):
+    tid = _int(tenant_id)
+    with conn() as c:
+        r = c.execute("SELECT * FROM scan_runs WHERE tenant_id=? AND status='running' ORDER BY id DESC LIMIT 1",
+                      (tid,)).fetchone()
+        return dict(r) if r else None
 
 
 def last_scan(tenant_id):

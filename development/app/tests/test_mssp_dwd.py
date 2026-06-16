@@ -9,6 +9,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["DB_PATH"] = tempfile.mkdtemp() + "/mssp_dwd.sqlite3"
 os.environ["DEFAULT_CUSTOMER_ID"] = "C0def"
+os.environ["FEED_FULL_SCAN"] = "false"   # this test mocks the legacy fetch_all_sources path
 os.environ["DEFAULT_DOMAIN"] = "example.com"
 os.environ["ADMIN_SUBJECT"] = "operator@example.com"     # the GLOBAL admin (single-org default)
 os.environ["SERVICE_ACCOUNT"] = "global-sa@proj.iam.gserviceaccount.com"

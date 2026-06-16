@@ -117,3 +117,34 @@ variable "max_instances" {
   default     = 4
   description = "Cloud Run max instances when STORAGE_BACKEND=firestore. sqlite is always pinned to 1."
 }
+
+# --- Phase 2 (ADR-0001): scan as a Cloud Run Job (scan-job.tf) ---
+variable "enable_scan_job" {
+  type        = bool
+  default     = false
+  description = "Deploy the scan as a Cloud Run JOB + Cloud Scheduler trigger (no request timeout, full backfill). Forces STORAGE_BACKEND=firestore for the job (durable across executions)."
+}
+
+variable "scan_job_timeout" {
+  type        = string
+  default     = "21600s" # 6h; Cloud Run Jobs allow up to 7 days (604800s)
+  description = "Per-execution timeout for the scan Job. A SIGTERM/timeout resumes via the page cursor + lease."
+}
+
+variable "scan_job_max_retries" {
+  type        = number
+  default     = 3
+  description = "Cloud Run Job max retries — a retried execution resumes the scan from its checkpoint."
+}
+
+variable "feed_overlap_days" {
+  type        = number
+  default     = 7
+  description = "Incremental re-scan overlap: start each scan from (high_water - N days) so a backdated/late-ingested feed record is never missed (idempotent upsert dedups the overlap)."
+}
+
+variable "scan_schedule" {
+  type        = string
+  default     = "0 */6 * * *"
+  description = "Cron schedule for the scan Job trigger (Cloud Scheduler)."
+}

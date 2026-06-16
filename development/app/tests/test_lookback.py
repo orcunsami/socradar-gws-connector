@@ -10,6 +10,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["DB_PATH"] = tempfile.mkdtemp() + "/lb.sqlite3"
 os.environ["DEFAULT_CUSTOMER_ID"] = "C0lb"
+os.environ["FEED_FULL_SCAN"] = "false"   # this test mocks the legacy fetch_all_sources path
 os.environ["DEFAULT_DOMAIN"] = "example.com"
 
 from app import connector, db, service  # noqa: E402

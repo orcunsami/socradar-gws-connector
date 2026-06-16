@@ -11,7 +11,7 @@
 # Usage:
 #   PROJECT=my-gcp-project \
 #   REGION=europe-west1 \
-#   ADMIN_SUBJECT=admin@customer.com \
+#   ADMIN_SUBJECT=connector-bot@customer.com \   # least-priv custom-role admin (not super-admin)
 #   DOMAIN=customer.com \
 #   CUSTOMER_ID=my_customer \
 #   FEED_KEY_FILE=/path/to/socradar-feed-key.txt \

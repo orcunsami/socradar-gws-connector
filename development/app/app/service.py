@@ -38,10 +38,23 @@ def _enabled_actions(tenant) -> list[str]:
 
 
 def _effective_start_date(tenant) -> str:
-    """Feed window. feed_lookback_days > 0 → relative 'look back N days' (today - N), the customer-set
-    1-week / 1-month window. 0 → the tenant's fixed feed_start_date. Keep N bounded (EXP-GOOGLE-0009:
-    a wide window pulls a lot of real PII)."""
-    days = settings.feed_lookback_days
+    """Feed window (startDate = a discovery-date filter, EXP-GOOGLE-0009). Resolution order:
+    (1) INCREMENTAL high-water mark — once a tenant has a feed_high_water (the last fully-scanned discovery
+        date), the next scan starts from (high_water - feed_overlap_days) so a boundary/backdated record is
+        never missed; the idempotent (tenant,email) upsert dedups the overlap. This makes daily scans small DELTAS.
+    (2) Before the first complete scan (high_water=''): the configured backfill window — per-tenant rolling
+        preset feed_lookback_days > 0 → today-N, else the global env lookback, else the fixed feed_start_date.
+    Keep the backfill bounded (a wide window pulls a lot of real PII)."""
+    hw = (tenant["feed_high_water"] if "feed_high_water" in tenant.keys() else "") or ""
+    if hw:
+        try:
+            return (datetime.date.fromisoformat(hw)
+                    - datetime.timedelta(days=max(0, settings.feed_overlap_days))).isoformat()
+        except ValueError:
+            pass   # malformed high-water -> fall through to the backfill window
+    days = (tenant["feed_lookback_days"] if "feed_lookback_days" in tenant.keys() else 0) or 0
+    if not days:
+        days = settings.feed_lookback_days
     if days and days > 0:
         return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     return tenant["feed_start_date"]
@@ -83,7 +96,187 @@ def _close_socradar_alarm(tenant, fu, actor):
 
 
 def run_scan(tenant, actor: str) -> dict:
-    """Fetch feed -> filter by verified domains -> lookup each -> persist. No remediation here."""
+    """Scan dispatcher (ADR-0001). feed_full_scan (default True) = the streaming, full-coverage, incremental,
+    resumable engine. feed_full_scan=False = the legacy single-shot path (bounded by feed_max_pages, kept as a
+    fallback + for the orchestration tests that mock connector.fetch_all_sources)."""
+    if settings.feed_full_scan:
+        return _run_scan_streaming(tenant, actor)
+    return _run_scan_legacy(tenant, actor)
+
+
+def _post_scan(tenant, actor, result, found_ids, events, now):
+    """Shared finalize tail for BOTH engines: best-effort analytics + behavioral anomaly check (a spike vs the
+    rolling baseline suppresses auto this scan) + gated AUTO-mode remediation of THIS scan's found users.
+    Runs ONCE against the COMPLETE found set (ADR-0001 #2: the blast-cap/anomaly/baseline gates assume one
+    atomic scan — they must never see a per-chunk partial count)."""
+    analytics.write_events(events)
+    anomalous = False
+    if result.get("ok"):
+        try:
+            anomalous = _scan_is_anomalous(tenant, result.get("found", 0))
+            if anomalous:
+                db.audit(tenant["id"], actor, "anomaly_detected", "alert", detail=(
+                    f"found={result.get('found')} spikes vs baseline (×{settings.anomaly_spike_factor}) — "
+                    "auto-remediation SUPPRESSED this scan; needs human review"))
+                result["anomaly"] = True
+        except Exception:
+            pass
+    # MSSP safety: the auto-mode policy is GLOBAL/fleet-wide — force-disable auto when >1 tenant is configured.
+    auto_ok = guardrails.effective_mode() == "auto" and len(db.list_tenants()) <= 1
+    if result.get("ok") and not anomalous and auto_ok and found_ids:
+        try:
+            baseline = tenant.get("auto_baseline_at", 0) or 0
+            if not baseline:
+                # never-auto-on-first-scan: the first auto-eligible scan only ESTABLISHES the baseline.
+                db.update_tenant(tenant["id"], auto_baseline_at=now)
+                db.audit(tenant["id"], "auto", "baseline_established", "ok",
+                         detail="first auto scan — baseline set; auto-remediation begins on the NEXT scan")
+            else:
+                _auto_remediate(tenant, found_ids, "auto", baseline)
+        except Exception as e:   # best-effort: auto-remediation must never break the scan result
+            try:
+                db.audit(tenant["id"], "auto", "auto_aborted", "error", detail=str(e)[:200])
+            except Exception:
+                pass
+    return result
+
+
+def _run_scan_streaming(tenant, actor: str) -> dict:
+    """Streaming, full-coverage, incremental, resumable scan (ADR-0001). Pages the whole window source by
+    source; applies the verified-domain filter INSIDE the page loop so only the tiny in-scope subset (~0.08%)
+    is retained (no OOM + PII minimization, EXP-GOOGLE-0009); Directory-looks-up only that subset; idempotently
+    upserts (UNION sources). Single-flight per tenant via a lease that reclaims a crashed zombie and resumes
+    from the page cursor. A per-invocation page budget (scan_pages_per_run) self-continues under a request
+    timeout; unset (Cloud Run Job) it runs to completion. On full completion it advances the tenant
+    high-water mark (the next scan is an incremental delta) and emits ONE honest coverage summary."""
+    now = time.time()
+    window_start = _effective_start_date(tenant)
+    scan_id, cursor_json, mode = db.claim_or_resume_scan(tenant["id"], now, settings.scan_lease_ttl, window_start)
+    if scan_id is None:
+        return {"ok": False, "busy": True, "error": "a scan is already running for this tenant"}
+    if mode == "resume":
+        active = db.get_active_scan(tenant["id"])
+        window_start = (active.get("window_start") if active else None) or window_start
+    cur = json.loads(cursor_json) if cursor_json else {}
+    done = list(cur.get("done", []))
+    cur_src, cur_page = cur.get("src"), cur.get("page", 1)
+    totals, processed = dict(cur.get("totals", {})), dict(cur.get("processed", {}))
+    inscope_seen, found_emails = set(cur.get("inscope", [])), set(cur.get("found", []))
+    found_ids, denied = list(cur.get("found_ids", [])), int(cur.get("denied", 0))
+    last_state = dict(cur)   # the most recent durable checkpoint — used to pause+resume on a mid-scan feed error
+    domains = _tenant_domains(tenant)
+    events, token, pages_this_run = [], [None], 0
+    budget = settings.scan_pages_per_run
+
+    def _tok():
+        if token[0] is None:
+            token[0] = connector.get_dwd_token([connector.SCOPE_READONLY],
+                                               subject=_tenant_subject(tenant), service_account=_tenant_sa(tenant))
+        return token[0]
+
+    try:
+        for src in connector.SOC_SOURCES:
+            if src in done:
+                continue
+            totals.setdefault(src, 0)        # ensure every source appears in the honest summary (even empty ones)
+            processed.setdefault(src, 0)
+            start_page = cur_page if src == cur_src else 1
+            for page_no, recs, total in connector.stream_source(
+                    tenant["feed_base"], tenant["feed_company_id"], tenant["feed_api_key"],
+                    src, window_start, start_page=start_page):
+                totals[src] = total
+                # `recs` can be a SANITIZED-empty page (a page whose raw records carried no @-email, e.g. VIP
+                # brand monitors). Process it as a no-op but STILL advance the cursor/budget so later pages with
+                # real emails are reached — never break here. stream_source only YIELDS raw-non-empty pages and
+                # ENDS on a raw-empty page, so this for-loop finishes exactly when the source is truly exhausted.
+                processed[src] = processed.get(src, 0) + len(recs)
+                # early in-scope filter: keep only the tiny verified-domain batch for THIS page, discard the rest
+                batch = {}
+                for r in recs:
+                    if connector.in_verified_domains(r["email"], domains):
+                        b = batch.setdefault(r["email"], {"sources": set(), "alarms": []})
+                        b["sources"].add(src)
+                        if r["alarm_id"] is not None and r["alarm_id"] not in b["alarms"]:
+                            b["alarms"].append(r["alarm_id"])
+                for email, info in sorted(batch.items()):
+                    status = connector.lookup_user(email, _tok())
+                    fid = db.upsert_flagged(tenant["id"], email, info["sources"], status, now, info["alarms"])
+                    inscope_seen.add(email)
+                    if analytics.enabled():
+                        events.append(analytics.event("flagged", status, email=email,
+                                      source=",".join(sorted(info["sources"])), tenant_id=tenant["id"], actor=actor))
+                    if status == "found":
+                        found_emails.add(email)
+                        if fid not in found_ids:
+                            found_ids.append(fid)
+                    elif status == "permission_denied":
+                        denied += 1
+                pages_this_run += 1
+                # checkpoint per page: cursor (resume), heartbeat (lease) + running tallies (accurate progress)
+                state = {"done": done, "src": src, "page": page_no + 1, "totals": totals, "processed": processed,
+                         "inscope": sorted(inscope_seen), "found": sorted(found_emails),
+                         "found_ids": found_ids, "denied": denied}
+                last_state = state
+                db.scan_heartbeat(scan_id, time.time(), cursor=json.dumps(state),
+                                  totals=totals, found=len(found_emails), unique=len(inscope_seen))
+                if budget and pages_this_run >= budget:
+                    db.pause_scan(scan_id, time.time(), json.dumps(state))   # hand off to the next invocation
+                    db.audit(tenant["id"], actor, "scan", "progress",
+                             detail=f"checkpoint: {len(done)} sources done, {src}@page {page_no}; "
+                                    f"in_scope={len(inscope_seen)} found={len(found_emails)} (resuming next run)")
+                    return {"ok": True, "more": True, "in_scope": len(inscope_seen),
+                            "found": len(found_emails), "processed": dict(processed)}
+            done.append(src)
+            cur_src, cur_page = None, 1
+            last_state = {"done": done, "src": None, "page": 1, "totals": totals, "processed": processed,
+                          "inscope": sorted(inscope_seen), "found": sorted(found_emails),
+                          "found_ids": found_ids, "denied": denied}
+        # --- every source fully paged: finalize (no truncation) ---
+        db.finish_scan(scan_id, time.time(), totals=totals, found=len(found_emails),
+                       unique=len(inscope_seen), status="done")
+        db.audit(tenant["id"], actor, "scan", "ok",
+                 detail=f"totals={totals} processed={processed} in_scope={len(inscope_seen)} "
+                        f"found={len(found_emails)} window>={window_start} (full coverage)")
+        if inscope_seen and denied >= len(inscope_seen):
+            db.audit(tenant["id"], actor, "scan", "warning",
+                     detail="ALL lookups returned 403 — domain-wide delegation likely not authorized yet "
+                            "(authorize the Client ID + 4 scopes in admin.google.com; propagation up to 24h)")
+        # incremental: the window is fully covered up to today -> advance the high-water mark (next scan = delta)
+        db.update_tenant(tenant["id"], feed_high_water=datetime.date.today().isoformat())
+        result = {"ok": True, "totals": totals, "processed": processed, "truncated": False,
+                  "in_scope": len(inscope_seen), "found": len(found_emails), "denied": denied}
+    except connector.ConnectorError as e:
+        # A feed/network error mid-backfill is usually TRANSIENT. KEEP the per-page checkpoint and flip the row
+        # to 'paused' so the NEXT execution RESUMES from where we stopped (NOT a fresh restart from window_start
+        # that would orphan hours of paging). Guard a PERMANENT error (bad key / feed down): count resumes that
+        # made ZERO progress and finalize 'error' after scan_max_stuck_resumes so it can't loop forever.
+        stuck = 0 if pages_this_run > 0 else int(cur.get("stuck", 0)) + 1
+        if stuck >= settings.scan_max_stuck_resumes:
+            db.finish_scan(scan_id, time.time(), error=str(e), status="error")
+            db.audit(tenant["id"], actor, "scan", "error",
+                     detail=f"giving up after {stuck} no-progress resumes: {str(e)[:160]}")
+            result = {"ok": False, "error": str(e)}
+        else:
+            resume_cursor = dict(last_state)
+            resume_cursor["stuck"] = stuck
+            db.pause_scan(scan_id, time.time(), json.dumps(resume_cursor))   # keep checkpoint -> next run resumes
+            db.audit(tenant["id"], actor, "scan", "error",
+                     detail=f"feed error mid-scan — checkpoint kept, will resume "
+                            f"(attempt {stuck}/{settings.scan_max_stuck_resumes}): {str(e)[:140]}")
+            result = {"ok": False, "error": str(e), "resumable": True}
+    except Exception as e:   # never leave a permanent zombie 'running' row
+        db.finish_scan(scan_id, time.time(), error=f"unexpected: {type(e).__name__}: {e}", status="error")
+        try:
+            db.audit(tenant["id"], actor, "scan", "error", detail=f"unexpected {type(e).__name__}")
+        except Exception:
+            pass
+        result = {"ok": False, "error": "scan failed unexpectedly"}
+    return _post_scan(tenant, actor, result, found_ids, events, now)
+
+
+def _run_scan_legacy(tenant, actor: str) -> dict:
+    """Legacy single-shot scan (feed_full_scan=False): fetch all -> filter -> lookup -> persist, bounded by
+    feed_max_pages (so a huge feed truncates — the problem ADR-0001 fixes). Kept as a fallback."""
     now = time.time()
     scan_id = db.start_scan(tenant["id"], now)
     events = []
@@ -117,7 +310,6 @@ def run_scan(tenant, actor: str) -> dict:
         if truncated:   # NEVER claim coverage we didn't achieve
             db.audit(tenant["id"], actor, "feed_truncated", "alert",
                      detail=f"hit feed_max_pages — only processed part of: {truncated}; raise FEED_MAX_PAGES / narrow the window")
-        # all in-scope lookups 403 → DWD almost certainly not authorized yet (day-1 state) — make it actionable
         if in_scope and denied == len(in_scope):
             db.audit(tenant["id"], actor, "scan", "warning",
                      detail="ALL lookups returned 403 — domain-wide delegation likely not authorized yet "
@@ -129,50 +321,14 @@ def run_scan(tenant, actor: str) -> dict:
         db.finish_scan(scan_id, time.time(), error=str(e))
         db.audit(tenant["id"], actor, "scan", "error", detail=str(e))
         result = {"ok": False, "error": str(e)}
-    except Exception as e:   # ANY other error -> finish the scan row (never a permanent zombie) + 500-safe
+    except Exception as e:
         db.finish_scan(scan_id, time.time(), error=f"unexpected: {type(e).__name__}: {e}")
         try:
             db.audit(tenant["id"], actor, "scan", "error", detail=f"unexpected {type(e).__name__}")
         except Exception:
             pass
         result = {"ok": False, "error": "scan failed unexpectedly"}
-    analytics.write_events(events)   # strictly OUTSIDE the core try — best-effort, can never break the scan
-    # behavioral anomaly check: a spike vs the rolling baseline suppresses auto-remediation this scan
-    anomalous = False
-    if result.get("ok"):
-        try:
-            anomalous = _scan_is_anomalous(tenant, result.get("found", 0))
-            if anomalous:
-                db.audit(tenant["id"], actor, "anomaly_detected", "alert", detail=(
-                    f"found={result.get('found')} spikes vs baseline (×{settings.anomaly_spike_factor}) — "
-                    "auto-remediation SUPPRESSED this scan; needs human review"))
-                result["anomaly"] = True
-        except Exception:
-            pass
-    # AUTO mode: gated, best-effort autonomous remediation of this scan's found users.
-    # manual/semi_auto do NOTHING here (semi_auto is a human one-click in the UI).
-    # MSSP safety (R2): the auto-mode policy (mode/kill-switch/exclusions/rate-limit) is GLOBAL/fleet-wide.
-    # One global policy must NOT auto-act across multiple customer orgs (their risk appetites differ). Until
-    # per-tenant policy exists, auto is force-disabled whenever more than one tenant is configured — every
-    # exposure then waits for a human. Single-org deploys are unaffected.
-    auto_ok = guardrails.effective_mode() == "auto" and len(db.list_tenants()) <= 1
-    if result.get("ok") and not anomalous and auto_ok and found_ids:
-        try:
-            baseline = tenant.get("auto_baseline_at", 0) or 0
-            if not baseline:
-                # never-auto-on-first-scan: the first auto-eligible scan only ESTABLISHES the baseline
-                # (the whole historical backlog is "new" — auto-remediating it en masse is catastrophic).
-                db.update_tenant(tenant["id"], auto_baseline_at=now)
-                db.audit(tenant["id"], "auto", "baseline_established", "ok",
-                         detail="first auto scan — baseline set; auto-remediation begins on the NEXT scan")
-            else:
-                _auto_remediate(tenant, found_ids, "auto", baseline)
-        except Exception as e:   # best-effort: auto-remediation must never break the scan result
-            try:
-                db.audit(tenant["id"], "auto", "auto_aborted", "error", detail=str(e)[:200])
-            except Exception:
-                pass
-    return result
+    return _post_scan(tenant, actor, result, found_ids, events, now)
 
 
 def remediate(tenant, flagged_id, action: str, actor: str, approved: bool = False) -> dict:
@@ -218,18 +374,24 @@ def remediate(tenant, flagged_id, action: str, actor: str, approved: bool = Fals
             db.audit(tenant["id"], actor, f"remediate:{action}", "blocked", email, "quarantine group out of verified domains")
             return {"ok": False, "error": "quarantine group is not in the tenant's verified domains"}
 
-    # Admin-target safeguard (EXP-GOOGLE-0041): a custom-role (non-super) subject CANNOT act on an admin
-    # target (Admin SDK 403s), and locking out the IT dept is dangerous. Refuse here with a clear status
-    # instead of a raw 403. Best-effort readonly pre-check; ANY failure falls through (the action's own 403
-    # is the backstop) so a transient blip never blocks a legitimate remediation.
+    # Admin-target safeguard (EXP-GOOGLE-0041 + arastirma9 §F1): a custom-role (non-super) subject CANNOT act
+    # on an admin target (the Admin SDK 403s even read-only), and locking out the IT dept is dangerous.
+    # FAIL CLOSED + LOUD: refuse if the target IS an admin OR if we cannot PROVE it is not (is_admin -> None).
+    # A transient blip must NOT let an admin-account remediation slip through (the old code returned on
+    # exception = fail-open). The refusal is an "alert"-severity audit (not a silent "blocked") so it surfaces.
+    admin_state = None
     try:
         ro_token = connector.get_dwd_token([connector.SCOPE_READONLY],
                                            subject=_tenant_subject(tenant), service_account=_tenant_sa(tenant))
-        if connector.is_admin(email, ro_token):
-            db.audit(tenant["id"], actor, f"remediate:{action}", "blocked", email, "admin target excluded")
-            return {"ok": False, "error": "refusing to remediate an admin account (needs a super-admin subject + manual review)"}
+        admin_state = connector.is_admin(email, ro_token)
     except Exception:
-        pass
+        admin_state = None   # could not pre-check -> indeterminate -> fail closed (below)
+    if admin_state is not False:   # True (admin) OR None (indeterminate) -> refuse, loudly
+        reason = "target is an admin" if admin_state is True else "admin status could not be verified"
+        db.audit(tenant["id"], actor, f"remediate:{action}", "alert", email,
+                 f"BLOCKED ({reason}) — needs a super-admin subject + manual review")
+        return {"ok": False, "admin_blocked": True,
+                "error": f"refusing to remediate: {reason} (needs a super-admin subject + manual review)"}
 
     # --- act ---
     try:
@@ -243,6 +405,41 @@ def remediate(tenant, flagged_id, action: str, actor: str, approved: bool = Fals
     if ok:
         db.mark_remediated(flagged_id, time.time())
         db.audit(tenant["id"], actor, f"remediate:{action}", "ok", email)
+        if action == "disable_2sv":
+            # SECURITY SEMANTICS (Claude-web review): disable_2sv strips ALL second factors -> the account becomes
+            # password-only UNLESS 2SV is org-ENFORCED (then the user must re-enroll). On our use-case (a LEAKED-
+            # password feed = the attacker already knows the password) this is a NET DOWNGRADE if used alone. Loud
+            # 'alert' audit so an operator never treats it as routine: it's only for stripping an attacker-enrolled
+            # factor, and must be paired with reset_password + 2SV re-enforcement.
+            db.audit(tenant["id"], actor, "remediate:disable_2sv", "alert", email,
+                     "2SV DISABLED — all 2nd factors removed; account is password-only unless 2SV is org-enforced. "
+                     "On a leaked-password account this is a DOWNGRADE alone — pair with reset_password + re-enforce 2SV.")
+        # SECURITY PAIRING (arastirma9 §F2): a Directory-API password reset does NOT reliably revoke OAuth
+        # tokens (the re-hash trap) and never revokes ASPs — so a bare reset_password leaves the ATO open.
+        # Auto-pair it with token + ASP revocation. Security-mandated, so it runs independent of the per-tenant
+        # enabled-toggle AND of two-person approval (the toggle is whether YOU chose reset; revoking the tokens a
+        # reset can't kill is non-optional). It calls connector.apply_action DIRECTLY on the SAME already-gated
+        # email (operator/domain/admin-target all cleared above) — never re-enters remediate(), so no recursion.
+        # The DWD client must authorize SCOPE_SECURITY (it's in SCOPES_UNION) or the pair token exchange 403s.
+        pairing_failed = False
+        for pair in connector.ACTIONS[action].get("pairs", []):
+            try:
+                ptok = connector.get_dwd_token([connector.ACTIONS[pair]["scope"]],
+                                               subject=_tenant_subject(tenant), service_account=_tenant_sa(tenant))
+                pok = connector.apply_action(pair, email, ptok)
+                db.audit(tenant["id"], actor, f"paired:{pair}", "ok" if pok else "fail", email,
+                         "security pairing after reset_password (a bare reset doesn't revoke tokens/ASPs)")
+                pairing_failed = pairing_failed or not pok
+            except Exception as ex:
+                db.audit(tenant["id"], actor, f"paired:{pair}", "error", email, str(ex)[:160])
+                pairing_failed = True
+        if pairing_failed:
+            # TRUTHFULNESS (adversary review): a failed token/ASP revoke reproduces EXACTLY the open-ATO state the
+            # pairing exists to close. Do NOT report a green 'remediated' — flag partial + alert, and DON'T close
+            # the SOCRadar alarm below (the exposure is not fully contained: tokens may still be live).
+            db.set_flagged_status(flagged_id, "partial")
+            db.audit(tenant["id"], actor, f"remediate:{action}", "alert", email,
+                     "PAIRING INCOMPLETE — reset done but token/ASP revoke failed; tokens may still be live (manual follow-up)")
         # post-state verification (execution != effect): re-read directory; best-effort, never blocks
         try:
             effect = connector.verify_action_effect(action, email, token, group=group)
@@ -252,8 +449,10 @@ def remediate(tenant, flagged_id, action: str, actor: str, approved: bool = Fals
                     db.set_flagged_status(flagged_id, "partial")
         except Exception:
             pass
-        _close_socradar_alarm(tenant, fu, actor)   # close the loop — best-effort, decoupled (below)
-        result = {"ok": True}
+        if not pairing_failed:
+            _close_socradar_alarm(tenant, fu, actor)   # close the loop ONLY if full containment landed
+        result = {"ok": True} if not pairing_failed else {
+            "ok": True, "partial": True, "warning": "reset done; token/ASP revoke failed — tokens may still be live"}
     else:
         db.audit(tenant["id"], actor, f"remediate:{action}", "fail", email, "API returned failure")
         result = {"ok": False, "error": "remediation API call failed"}

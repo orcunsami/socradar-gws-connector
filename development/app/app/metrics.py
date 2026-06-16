@@ -25,7 +25,10 @@ def _median(rows):
     return _pct(rows, 50)
 
 
-def compute(tenant_id) -> dict:
+def compute(tenant_id, verify_chain: bool = True) -> dict:
+    """verify_chain=False skips the O(N)-over-the-whole-audit-log integrity check — pass it on the dashboard
+    hot path (every page load). The audit chain is a tamper-check, not an operational KPI, and is already
+    verified on schedule (/tasks/verify-audit); the on-demand /metrics page computes it with verify_chain=True."""
     flagged = db.list_flagged(tenant_id)
     counts = {"open": 0, "remediated": 0, "partial": 0}
     dwell = []   # detection (first_seen) -> remediation (remediated_at), seconds
@@ -57,7 +60,7 @@ def compute(tenant_id) -> dict:
 
     anomalies = [a for a in aud if a.get("action") == "anomaly_detected"]
 
-    return {
+    out = {
         "flagged_total": total,
         "counts": counts,
         "coverage": coverage,                                   # 0..1, fraction handled
@@ -65,7 +68,9 @@ def compute(tenant_id) -> dict:
         "remediation_success_rate": success_rate,
         "remediation_attempts": rem_attempts,
         "last_scan_age_seconds": scan_age,
-        "audit_integrity": db.verify_audit_chain(tenant_id),    # tamper check surfaced as a metric
         "anomalies_recent": len(anomalies),
         "last_anomaly": anomalies[0] if anomalies else None,
     }
+    if verify_chain:   # OFF on the dashboard hot path (unbounded O(N) full-chain recompute); ON for /metrics
+        out["audit_integrity"] = db.verify_audit_chain(tenant_id)
+    return out

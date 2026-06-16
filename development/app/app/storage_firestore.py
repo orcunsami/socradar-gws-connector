@@ -114,7 +114,7 @@ def create_tenant(customer_id, name, verified_domains, feed_base, feed_company_i
         "verified_domains": json.dumps(verified_domains), "feed_base": feed_base,
         "feed_company_id": feed_company_id, "feed_api_key": feed_api_key,
         "feed_start_date": feed_start_date, "enabled_actions": json.dumps([]),
-        "quarantine_group": "", "auto_baseline_at": 0,
+        "quarantine_group": "", "auto_baseline_at": 0, "feed_lookback_days": 0, "feed_high_water": "",
         "admin_subject": admin_subject, "service_account": service_account, "created_at": time.time(),
     }
     try:
@@ -135,18 +135,26 @@ def update_tenant(tenant_id, **fields):
 
 # ---------- flagged users ----------
 def upsert_flagged(tenant_id, email, sources, lookup_status, now, socradar_refs=None):
+    """UNION sources + socradar_refs on conflict (ADR-0001 #3: a streamed scan upserts the same email from
+    separate sources/pages). The per-tenant scan lease guarantees a single writer."""
     fid = _flagged_id(tenant_id, email)
-    refs = json.dumps(socradar_refs or [])
+    new_refs = list(socradar_refs or [])
     ref = _db().collection(_FLAGGED).document(fid)
     snap = ref.get()
     if snap.exists:
-        ref.update({"sources": json.dumps(sorted(sources)), "lookup_status": lookup_status,
-                    "last_seen": now, "socradar_refs": refs})
+        d = snap.to_dict() or {}
+        merged_sources = sorted(set(sources) | set(json.loads(d.get("sources") or "[]")))
+        old_refs = json.loads(d.get("socradar_refs") or "[]")
+        merged_refs = old_refs + [r for r in new_refs if r not in old_refs]
+        # don't let a TRANSIENT blip (error_*) downgrade an already-found user (would block remediation).
+        ls = "found" if (d.get("lookup_status") == "found" and str(lookup_status).startswith("error_")) else lookup_status
+        ref.update({"sources": json.dumps(merged_sources), "lookup_status": ls,
+                    "last_seen": now, "socradar_refs": json.dumps(merged_refs)})
     else:
         ref.set({"id": fid, "tenant_id": tenant_id, "email": email,
-                 "sources": json.dumps(sorted(sources)), "lookup_status": lookup_status,
+                 "sources": json.dumps(sorted(set(sources))), "lookup_status": lookup_status,
                  "status": "open", "first_seen": now, "last_seen": now, "remediated_at": None,
-                 "socradar_refs": refs, "socradar_close_status": None})
+                 "socradar_refs": json.dumps(new_refs), "socradar_close_status": None})
     return fid
 
 
@@ -210,14 +218,75 @@ def flagged_counts(tenant_id):
 def start_scan(tenant_id, now):
     ref = _db().collection(_SCANS).document()
     ref.set({"id": ref.id, "tenant_id": tenant_id, "started_at": now, "finished_at": None,
-             "totals": None, "found_count": 0, "unique_emails": 0, "error": None})
+             "totals": None, "found_count": 0, "unique_emails": 0, "error": None,
+             "status": "running", "cursor": None, "window_start": None, "heartbeat": now})
     return ref.id
 
 
-def finish_scan(scan_id, now, totals=None, found=0, unique=0, error=None):
+def finish_scan(scan_id, now, totals=None, found=0, unique=0, error=None, status=None):
+    st = status or ("error" if error else "done")
     _db().collection(_SCANS).document(str(scan_id)).update({
         "finished_at": now, "totals": json.dumps(totals or {}),
-        "found_count": found, "unique_emails": unique, "error": error})
+        "found_count": found, "unique_emails": unique, "error": error, "status": st})
+
+
+def claim_or_resume_scan(tenant_id, now, lease_ttl, window_start):
+    """Single-flight per tenant under a Firestore TRANSACTION (atomic read-check-write — two workers cannot
+    both create/claim the same tenant's scan; same pattern as mark_remediated). Status is filtered
+    client-side off a single-field tenant_id query, so NO composite index is needed. Returns (scan_id,
+    cursor, mode)."""
+    coll = _db().collection(_SCANS)
+    q = coll.where(filter=FieldFilter("tenant_id", "==", tenant_id))
+    out = {}
+
+    @firestore.transactional
+    def _claim(tx):
+        rows = [(s.reference, s.to_dict() or {}) for s in q.stream(transaction=tx)]
+        active = sorted([rd for rd in rows if rd[1].get("status") in ("running", "paused")],
+                        key=lambda rd: rd[1].get("started_at", 0), reverse=True)
+        if active:
+            ref, d = active[0]
+            if d.get("status") == "running" and now - (d.get("heartbeat") or 0) < lease_ttl:
+                out.clear()
+                out["mode"] = "busy"
+                return
+            tx.update(ref, {"status": "running", "heartbeat": now})   # paused handoff OR stale zombie
+            out.clear()
+            out.update(scan_id=ref.id, cursor=d.get("cursor"), mode="resume")
+            return
+        new_ref = coll.document()
+        tx.set(new_ref, {"id": new_ref.id, "tenant_id": tenant_id, "started_at": now, "finished_at": None,
+                         "totals": None, "found_count": 0, "unique_emails": 0, "error": None,
+                         "status": "running", "cursor": None, "window_start": window_start, "heartbeat": now})
+        out.clear()
+        out.update(scan_id=new_ref.id, cursor=None, mode="new")
+
+    _claim(_db().transaction())
+    return out.get("scan_id"), out.get("cursor"), out.get("mode")
+
+
+def pause_scan(scan_id, now, cursor):
+    _db().collection(_SCANS).document(str(scan_id)).update(
+        {"status": "paused", "heartbeat": now, "cursor": cursor})
+
+
+def scan_heartbeat(scan_id, now, cursor=None, totals=None, found=None, unique=None):
+    upd = {"heartbeat": now}
+    if cursor is not None:
+        upd["cursor"] = cursor
+    if totals is not None:
+        upd["totals"] = json.dumps(totals)
+    if found is not None:
+        upd["found_count"] = found
+    if unique is not None:
+        upd["unique_emails"] = unique
+    _db().collection(_SCANS).document(str(scan_id)).update(upd)
+
+
+def get_active_scan(tenant_id):
+    running = [s.to_dict() | {"id": s.id} for s in _by_tenant(_SCANS, tenant_id)
+               if (s.to_dict() or {}).get("status") == "running"]
+    return max(running, key=lambda r: r.get("started_at", 0)) if running else None
 
 
 def last_scan(tenant_id):

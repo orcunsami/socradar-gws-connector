@@ -9,6 +9,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["DB_PATH"] = tempfile.mkdtemp() + "/mssp_e2e.sqlite3"
 os.environ["DEFAULT_CUSTOMER_ID"] = "C0mssp"          # the MSSP's own/primary tenant
+os.environ["FEED_FULL_SCAN"] = "false"               # this E2E mocks the legacy fetch_all_sources path
 os.environ["DEFAULT_DOMAIN"] = "mssp.com"
 os.environ["ADMIN_SUBJECT"] = "operator@mssp.com"
 os.environ["SERVICE_ACCOUNT"] = "connector@mssp-proj.iam.gserviceaccount.com"
@@ -37,6 +38,7 @@ connector.get_dwd_token = lambda scopes, subject=None, service_account=None, **k
     MINTS.append({"subject": subject, "sa": service_account}) or "tok")
 connector.lookup_user = lambda email, token: "found"
 connector.apply_action = lambda *a, **k: True
+connector.is_admin = lambda email, token: False   # non-admin target (admin-safeguard now fail-closed — GAP2)
 connector.verify_action_effect = lambda *a, **k: "unverifiable"
 
 db.init_db()

@@ -10,6 +10,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["DB_PATH"] = tempfile.mkdtemp() + "/ba.sqlite3"
 os.environ["DEFAULT_CUSTOMER_ID"] = "C0ba"
+os.environ["FEED_FULL_SCAN"] = "false"   # this test mocks the legacy fetch_all_sources path
 os.environ["DEFAULT_DOMAIN"] = "example.com"
 os.environ["ADMIN_SUBJECT"] = "operator@example.com"
 

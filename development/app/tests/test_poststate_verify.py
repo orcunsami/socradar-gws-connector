@@ -25,6 +25,7 @@ db.init_db()
 t = db.first_tenant()
 db.update_tenant(t["id"], enabled_actions=json.dumps(["suspend", "signout"]))
 connector.get_dwd_token = lambda scopes, **kw: "tok"
+connector.is_admin = lambda email, token: False   # non-admin target (admin-safeguard now fail-closed — GAP2)
 
 # --- A5: post-state confirmed (suspend really took) ---
 connector.apply_action = lambda action, email, token, group=None: True

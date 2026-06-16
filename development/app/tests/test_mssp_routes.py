@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 connector.get_dwd_token = lambda scopes, **kw: "tok"
 connector.apply_action = lambda *a, **k: True
+connector.is_admin = lambda email, token: False   # non-admin target (admin-safeguard now fail-closed — GAP2)
 connector.verify_action_effect = lambda *a, **k: "unverifiable"
 
 db.init_db()   # startup event isn't fired without the TestClient context manager; init the schema directly

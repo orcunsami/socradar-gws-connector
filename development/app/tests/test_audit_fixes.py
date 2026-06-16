@@ -14,6 +14,7 @@ import urllib.error
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["DB_PATH"] = tempfile.mkdtemp() + "/af.sqlite3"
 os.environ["DEFAULT_CUSTOMER_ID"] = "C0af"
+os.environ["FEED_FULL_SCAN"] = "false"   # this test exercises the legacy fetch_all_sources truncation-honesty path
 os.environ["DEFAULT_DOMAIN"] = "example.com"
 os.environ["ADMIN_SUBJECT"] = "operator@example.com"
 
@@ -28,6 +29,7 @@ c = {}
 db.init_db()
 t = db.first_tenant()
 connector.get_dwd_token = lambda scopes, **kw: "tok"
+connector.is_admin = lambda email, token: False   # non-admin target (admin-safeguard now fail-closed — GAP2)
 connector.fetch_all_sources = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))   # non-ConnectorError
 res = service.run_scan(db.get_tenant(t["id"]), "x")
 last = db.last_scan(t["id"])

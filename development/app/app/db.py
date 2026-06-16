@@ -26,8 +26,8 @@ else:
 __all__ = ["DuplicateTenantError", "init_db", "ensure_default_tenant", "get_tenant", "first_tenant",
            "list_tenants", "create_tenant", "update_tenant", "upsert_flagged", "list_flagged",
            "get_flagged", "mark_remediated", "set_flagged_status", "set_close_status", "flagged_counts",
-           "start_scan", "finish_scan", "last_scan", "recent_scans", "audit", "list_audit",
-           "verify_audit_chain",
+           "start_scan", "finish_scan", "claim_or_resume_scan", "scan_heartbeat", "pause_scan", "get_active_scan",
+           "last_scan", "recent_scans", "audit", "list_audit", "verify_audit_chain",
            "count_auto_actions_since", "create_approval", "get_approval", "list_approvals",
            "set_approval_state"]
 
@@ -118,8 +118,24 @@ def start_scan(tenant_id, now):
     return _b.start_scan(tenant_id, now)
 
 
-def finish_scan(scan_id, now, totals=None, found=0, unique=0, error=None):
-    _b.finish_scan(scan_id, now, totals=totals, found=found, unique=unique, error=error)
+def finish_scan(scan_id, now, totals=None, found=0, unique=0, error=None, status=None):
+    _b.finish_scan(scan_id, now, totals=totals, found=found, unique=unique, error=error, status=status)
+
+
+def claim_or_resume_scan(tenant_id, now, lease_ttl, window_start):
+    return _b.claim_or_resume_scan(tenant_id, now, lease_ttl, window_start)
+
+
+def scan_heartbeat(scan_id, now, cursor=None, totals=None, found=None, unique=None):
+    _b.scan_heartbeat(scan_id, now, cursor=cursor, totals=totals, found=found, unique=unique)
+
+
+def pause_scan(scan_id, now, cursor):
+    _b.pause_scan(scan_id, now, cursor)
+
+
+def get_active_scan(tenant_id):
+    return _b.get_active_scan(tenant_id)
 
 
 def last_scan(tenant_id):

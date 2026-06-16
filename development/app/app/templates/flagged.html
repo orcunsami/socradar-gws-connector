@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-head">
   <h1>Flagged Users</h1>
-  <form method="post" action="/scan"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn">Re-scan</button></form>
+  <form method="post" action="/scan" data-scan><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit" data-busy-text="Scanning…">Re-scan</button></form>
 </div>
 
 {% if not enabled %}
@@ -22,7 +22,7 @@
 
 {% if rows %}
 <table class="grid">
-  <thead><tr><th>Email</th><th>Sources</th><th>Directory</th><th>Status</th><th>Last seen</th><th>Action</th></tr></thead>
+  <thead><tr><th>Email</th><th>Sources</th><th>Directory</th><th>Status</th><th>Activity</th><th>Last seen</th><th>Action</th></tr></thead>
   <tbody>
   {% for r in rows %}
     <tr>
@@ -39,6 +39,26 @@
         {% elif r.status == 'partial' %}<span class="pill warn">partial</span>
         {% else %}<span class="pill">open</span>{% endif %}
       </td>
+      <td>
+        {% set acts = history.get(r.email, []) %}
+        {% if acts %}
+        <details class="hist">
+          <summary>{{ acts|length }} event{{ 's' if acts|length != 1 else '' }}</summary>
+          <ul class="hist-list">
+            {% for a in acts %}
+            <li>
+              <code class="hist-act">{{ a.action }}</code>
+              {% if a.result == 'ok' %}<span class="pill ok tiny">ok</span>
+              {% elif a.result in ('blocked','pending','dryrun','skipped') %}<span class="pill warn tiny">{{ a.result }}</span>
+              {% else %}<span class="pill err tiny">{{ a.result }}</span>{% endif %}
+              <span class="muted small">{{ a.ts|dt }}{% if a.actor %} · {{ a.actor }}{% endif %}{% if a.scan_id %} · <a href="/scans/{{ a.scan_id }}" title="The scan this action followed">scan {{ a.scan_started|dt }}</a>{% endif %}</span>
+              {% if a.detail %}<div class="muted small hist-detail">{{ a.detail }}</div>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% else %}<span class="muted small">—</span>{% endif %}
+      </td>
       <td class="muted small">{{ r.last_seen|dt }}</td>
       <td>
         {% if r.email == admin_subject %}
@@ -46,7 +66,7 @@
         {% elif r.status != 'remediated' and r.lookup_status == 'found' %}
           {% if mode == 'semi_auto' and enabled %}
           <form method="post" action="/flagged/{{ r.id }}/auto-remediate" class="inline"
-                onsubmit="return confirm('Apply ALL enabled actions to {{ r.email }}?')">
+                data-confirm="Apply ALL enabled actions to {{ r.email }}?">
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <input type="hidden" name="exp_tenant" value="{{ tenant.id }}">
             <button class="btn danger small" type="submit">Remediate (all enabled)</button>
@@ -55,7 +75,7 @@
           {% for key, meta in actions.items() %}
             {% if key in enabled %}
             <form method="post" action="/flagged/{{ r.id }}/remediate" class="inline"
-                  onsubmit="return confirm('{{ meta.label }} for {{ r.email }}?')">
+                  data-confirm="{{ meta.label }} for {{ r.email }}?">
               <input type="hidden" name="csrf" value="{{ csrf }}">
               <input type="hidden" name="exp_tenant" value="{{ tenant.id }}">
               <input type="hidden" name="action" value="{{ key }}">

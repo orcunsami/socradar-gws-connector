@@ -66,7 +66,22 @@ def _fmt_ts(epoch):
     return datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _fmt_dur(seconds):
+    """Human-readable duration for the dashboard KPIs. None -> em dash."""
+    if seconds is None:
+        return "—"
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h {(s % 3600) // 60}m"
+    return f"{s // 86400}d {(s % 86400) // 3600}h"
+
+
 templates.env.filters["dt"] = _fmt_ts
+templates.env.filters["dur"] = _fmt_dur
 
 
 @app.on_event("startup")
@@ -107,7 +122,8 @@ def _active_tenant(request: Request):
 def _ctx(request: Request, user: dict, **extra) -> dict:
     base = {"user": user, "csrf": _csrf(request),
             "version": __import__("app").__version__, "actions": connector.ACTIONS,
-            "active_tenant": _active_tenant(request), "all_tenants": db.list_tenants()}
+            "active_tenant": _active_tenant(request), "all_tenants": db.list_tenants(),
+            "require_approval": settings.require_approval}   # nav shows Approvals only when this is on
     base.update(extra)
     return base
 
@@ -151,7 +167,10 @@ def dashboard(request: Request):
     counts = db.flagged_counts(t["id"])
     last = db.last_scan(t["id"])
     return _render("dashboard.html", request, user, tenant=t, counts=counts, last=last,
-                   totals=json.loads(last["totals"]) if last and last["totals"] else {})
+                   totals=json.loads(last["totals"]) if last and last["totals"] else {},
+                   # verify_chain=False: keep the unbounded audit-chain recompute OFF the landing hot path
+                   # (it's a scheduled tamper-check, not a per-load KPI). Cheap KPIs only here.
+                   m=metrics.compute(t["id"], verify_chain=False))
 
 
 @app.post("/scan")
@@ -162,7 +181,16 @@ def scan(request: Request, csrf: str = Form("")):
     if not _check_csrf(request, csrf):
         return RedirectResponse("/?err=csrf", status_code=303)
     result = service.run_scan(_active_tenant(request), user["email"])
-    flag = "scan_ok" if result.get("ok") else "scan_err"
+    # a budget-bounded scan can return part-way (more=True) or refuse if one is already running (busy=True);
+    # don't flash a FALSE "completed" on a partial, and don't flash "failed" on a busy.
+    if result.get("more"):
+        flag = "scan_more"
+    elif result.get("busy"):
+        flag = "scan_busy"
+    elif result.get("ok"):
+        flag = "scan_ok"
+    else:
+        flag = "scan_err"
     return RedirectResponse(f"/flagged?{flag}=1", status_code=303)
 
 
@@ -175,7 +203,27 @@ def flagged(request: Request):
     rows = []
     for r in db.list_flagged(t["id"]):
         rows.append({**dict(r), "sources_list": json.loads(r["sources"])})
-    return _render("flagged.html", request, user, tenant=t, rows=rows,
+    # per-user activity timeline (so a flagged row can show exactly what was done to it, when, and in WHICH
+    # scan's window). The audit trail records every remediate:/paired:/verify:/auto:/approval row with a
+    # target_email; group it by email (no schema change) and tag each with the scan it falls under.
+    scans = db.recent_scans(t["id"], 200)   # newest first
+
+    def _scan_of(ts):
+        for s in scans:                      # the most recent scan started at/before this event
+            if s["started_at"] <= ts:
+                return s
+        return None
+    history = {}
+    for a in db.list_audit(t["id"], 500):
+        em = a.get("target_email")
+        if not em:
+            continue
+        sc = _scan_of(a["ts"])
+        row = dict(a)
+        row["scan_id"] = sc["id"] if sc else None
+        row["scan_started"] = sc["started_at"] if sc else None
+        history.setdefault(em, []).append(row)
+    return _render("flagged.html", request, user, tenant=t, rows=rows, history=history,
                    enabled=json.loads(t["enabled_actions"]),
                    admin_subject=service._tenant_subject(t),   # MSSP: hide remediation for THIS org's admin
                    mode=guardrails.effective_mode(), dry_run=settings.auto_dry_run,
@@ -324,13 +372,17 @@ def settings_page(request: Request):
     t = _active_tenant(request)
     return _render("settings.html", request, user, tenant=t,
                    verified_domains=", ".join(json.loads(t["verified_domains"])),
-                   enabled=json.loads(t["enabled_actions"]))
+                   enabled=json.loads(t["enabled_actions"]),
+                   approval_actions=settings.approval_action_list,   # which actions need a 2nd-admin approval
+                   high_blast=settings.auto_high_blast_list,         # which never fire automatically
+                   require_approval=settings.require_approval)
 
 
 @app.post("/settings")
 def settings_save(request: Request, verified_domains: str = Form(""), feed_base: str = Form(""),
                   feed_company_id: str = Form(""), feed_api_key: str = Form(""),
-                  feed_start_date: str = Form(""), quarantine_group: str = Form(""),
+                  feed_start_date: str = Form(""), feed_lookback_days: int = Form(0),
+                  quarantine_group: str = Form(""),
                   admin_subject: str = Form(""), service_account: str = Form(""),
                   enabled_actions: list[str] = Form(default=[]), csrf: str = Form("")):
     user = auth.current_user(request)
@@ -364,6 +416,8 @@ def settings_save(request: Request, verified_domains: str = Form(""), feed_base:
         "feed_base": feed_base.strip() or t["feed_base"],
         "feed_company_id": feed_company_id.strip() or t["feed_company_id"],
         "feed_start_date": feed_start_date.strip() or t["feed_start_date"],
+        # rolling-window preset (today - N). 0 = use the fixed feed_start_date. Validated against the offered set.
+        "feed_lookback_days": feed_lookback_days if feed_lookback_days in (0, 1, 7, 30, 90, 182, 365) else 0,
         "enabled_actions": json.dumps(valid_actions),
         "quarantine_group": qg,
         "admin_subject": asub,
@@ -384,6 +438,53 @@ def audit_page(request: Request):
         return RedirectResponse("/login", status_code=303)
     t = _active_tenant(request)
     return _render("audit.html", request, user, tenant=t, rows=db.list_audit(t["id"]))
+
+
+@app.get("/scans", response_class=HTMLResponse)
+def scans_page(request: Request):
+    """History of every scan run (a 'Scans' tab alongside 'Flagged Users'). Answers 'show me each scan and
+    whether anything was DONE about it' — for each scan we also count the successful remediations that landed
+    in that scan's window, read from the same audit trail (no extra schema)."""
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    scans = db.recent_scans(t["id"], 50)   # finished scans, newest first
+    rem_ts = [a["ts"] for a in db.list_audit(t["id"], 1000)
+              if a["action"].startswith("remediate:") and a["result"] == "ok"]
+    enriched = []
+    for i, s in enumerate(scans):
+        lo = s["started_at"]
+        hi = scans[i - 1]["started_at"] if i > 0 else float("inf")   # window up to the next-newer scan
+        enriched.append({**s,
+                         "totals_map": json.loads(s["totals"]) if s.get("totals") else {},
+                         "remediations": sum(1 for ts in rem_ts if lo <= ts < hi)})
+    return _render("scans.html", request, user, tenant=t, scans=enriched)
+
+
+@app.get("/scans/{scan_id}", response_class=HTMLResponse)
+def scan_detail_page(request: Request, scan_id: str):
+    """Drill into one scan: its own counts + the EXACT actions taken in its window (between this scan and
+    the next one). Lets the operator see a scan's result and what was done about it, in one place."""
+    user = auth.current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    t = _active_tenant(request)
+    scans = db.recent_scans(t["id"], 200)
+    idx = next((i for i, s in enumerate(scans) if str(s["id"]) == str(scan_id)), None)
+    if idx is None:
+        return RedirectResponse("/scans?err=notfound", status_code=303)
+    s = scans[idx]
+    lo = s["started_at"]
+    hi = scans[idx - 1]["started_at"] if idx > 0 else float("inf")   # window up to the next-newer scan
+    in_window = [a for a in db.list_audit(t["id"], 1000) if lo <= a["ts"] < hi]
+    meta_rows = [a for a in in_window if a["action"] in ("scan", "feed_truncated", "anomaly_detected")]
+    action_rows = [a for a in in_window
+                   if a["action"].startswith(("remediate:", "paired:", "verify:", "auto:", "approval"))]
+    scan = {**s, "totals_map": json.loads(s["totals"]) if s.get("totals") else {},
+            "duration": (s["finished_at"] - s["started_at"]) if s.get("finished_at") else None}
+    return _render("scan_detail.html", request, user, tenant=t, scan=scan,
+                   meta_rows=meta_rows, action_rows=action_rows)
 
 
 @app.get("/tenants", response_class=HTMLResponse)

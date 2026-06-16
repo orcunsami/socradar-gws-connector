@@ -2,11 +2,24 @@
 {% block content %}
 <div class="page-head">
   <h1>Dashboard</h1>
-  <form method="post" action="/scan" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Scanning…'">
+  <form method="post" action="/scan" data-scan>
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn primary" type="submit">Run scan now</button>
+    <button class="btn primary" type="submit" data-busy-text="Scanning…">Run scan now</button>
   </form>
 </div>
+
+<details class="onboard" {% if not last %}open{% endif %}>
+  <summary>New here? How this connector works</summary>
+  <div class="onboard-body">
+    <ol>
+      <li><b>Configure the tenant</b> in <a href="/settings">Settings</a>: your Verified domains, the Feed window, and paste the SOCRadar feed key.</li>
+      <li><b>Enable the actions</b> your team is allowed to take (also in Settings). Enabling an action only makes its button available; nothing runs on its own.</li>
+      <li><b>Run a scan</b> (the button above). The connector reads the SOCRadar feed, keeps the emails inside your verified domains, and checks each against your Workspace directory. Matches show up in <a href="/flagged">Flagged Users</a>.</li>
+      <li><b>Act on a flagged user</b>: click an action (e.g. Revoke sessions). Every action is logged in <a href="/audit">Audit</a>, in that user's <b>Activity</b>, and per <a href="/scans">Scan</a>.</li>
+    </ol>
+    <p class="muted small">Remediation mode is <b>manual</b> by default (you click each action). Two-person approval and autonomous (auto-on-scan) modes are optional and off by default.</p>
+  </div>
+</details>
 
 <div class="cards">
   <div class="card"><div class="num">{{ counts.get('open', 0) }}</div><div class="lbl">Open exposures</div></div>
@@ -14,6 +27,23 @@
   <div class="card"><div class="num">{{ totals.get('botnet', 0) }}</div><div class="lbl">Botnet (feed total)</div></div>
   <div class="card"><div class="num">{{ totals.get('pii', 0) }}</div><div class="lbl">PII (feed total)</div></div>
   <div class="card"><div class="num">{{ totals.get('vip', 0) }}</div><div class="lbl">VIP (alarm only)</div></div>
+</div>
+
+<div class="panel">
+  <h2>Operational metrics</h2>
+  <table class="kv">
+    <tr><th>Coverage <span class="help-icon" tabindex="0" data-tip="Fraction of detected exposures that have been fully or partially remediated.">i</span></th>
+        <td>{% if m.coverage is not none %}<b>{{ (m.coverage * 100)|round|int }}%</b> handled{% else %}<span class="muted">no exposures yet</span>{% endif %}</td></tr>
+    <tr><th>Dwell time <span class="help-icon" tabindex="0" data-tip="Time from first detecting an exposure to remediating it. p50 = median, p95 = worst tail.">i</span></th>
+        <td>{% if m.dwell_seconds.n %}p50 <b>{{ m.dwell_seconds.p50|dur }}</b> · p95 {{ m.dwell_seconds.p95|dur }} <span class="muted small">(n={{ m.dwell_seconds.n }})</span>{% else %}<span class="muted">no remediations yet</span>{% endif %}</td></tr>
+    <tr><th>Remediation success <span class="help-icon" tabindex="0" data-tip="Of the remediation actions that ran, how many the Google API reported as successful.">i</span></th>
+        <td>{% if m.remediation_success_rate is not none %}<b>{{ (m.remediation_success_rate * 100)|round|int }}%</b> <span class="muted small">of {{ m.remediation_attempts }} attempt{{ 's' if m.remediation_attempts != 1 else '' }}</span>{% else %}<span class="muted">no attempts yet</span>{% endif %}</td></tr>
+    <tr><th>Scan freshness</th>
+        <td>{% if m.last_scan_age_seconds is not none %}last scan {{ m.last_scan_age_seconds|dur }} ago{% else %}<span class="muted">no scans yet</span>{% endif %}</td></tr>
+    {% if m.audit_integrity %}<tr><th>Audit integrity <span class="help-icon" tabindex="0" data-tip="Tamper-evident check of the audit hash-chain. 'intact' = no row was edited, deleted, or reordered.">i</span></th>
+        <td>{% if m.audit_integrity.ok %}<span class="pill ok">intact</span> <span class="muted small">({{ m.audit_integrity.count }} entries)</span>{% else %}<span class="pill err">broken</span> <span class="muted small">{{ m.audit_integrity.reason }}</span>{% endif %}</td></tr>{% endif %}
+    {% if m.anomalies_recent %}<tr><th>Anomalies</th><td><span class="pill warn">{{ m.anomalies_recent }} recent</span> <a class="small" href="/audit">see Audit</a></td></tr>{% endif %}
+  </table>
 </div>
 
 <div class="panel">
@@ -33,7 +63,7 @@
   <h2>Feed configuration</h2>
   <table class="kv">
     <tr><th>Verified domains</th><td>{{ tenant.verified_domains }}</td></tr>
-    <tr><th>Feed</th><td>{{ tenant.feed_base }} · company {{ tenant.feed_company_id }} · since {{ tenant.feed_start_date }}</td></tr>
+    <tr><th>Feed</th><td>{{ tenant.feed_base }} · company {{ tenant.feed_company_id }} · window: {% if tenant.feed_lookback_days %}last {{ tenant.feed_lookback_days }} day{{ 's' if tenant.feed_lookback_days != 1 else '' }} (rolling){% else %}since {{ tenant.feed_start_date }}{% endif %}</td></tr>
     <tr><th>API key</th><td>{{ '•••• set' if tenant.feed_api_key else 'not set — add it in Settings' }}</td></tr>
   </table>
   <p class="muted small">VIP records carry a name only (no email), so they surface as alarms but are never remediated.</p>

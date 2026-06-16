@@ -1,90 +1,84 @@
 # Deploy the SOCRadar Google Workspace Connector
 
-This walkthrough deploys the connector to **your own** Google Cloud project as a private Cloud Run
-service, running keyless (no service-account key file). It takes about 10 minutes.
+This is the prose version of the deploy. The interactive, click-to-run version runs automatically in the
+Cloud Shell **side panel** when you use the "Open in Cloud Shell" button (it is `deploy/tutorial.md`).
 
-You run every command here in **your** Cloud Shell, signed in as yourself. SOCRadar hosts nothing.
+The connector deploys into **your own** Google Cloud project as a private Cloud Run service, running keyless
+(no service-account key file). It takes about 10 minutes. SOCRadar hosts nothing.
+
+The whole flow is **one config file and one command, run twice**.
 
 ## Before you begin
 
-Pick the project to deploy into, then set it:
+Pick the project to deploy into, set it, and confirm billing is on (Cloud Run, Secret Manager, and Cloud
+Scheduler need it):
 
 ```bash
 gcloud config set project YOUR_PROJECT_ID
-```
-
-Confirm you are signed in and billing is enabled on the project (the deploy needs Cloud Run, Secret
-Manager, and Cloud Scheduler, which require billing):
-
-```bash
-gcloud config get-value account
 gcloud billing projects describe "$(gcloud config get-value project)" --format='value(billingEnabled)'
 ```
 
-If billing shows `False`, link a billing account in the console first (Billing → Link a billing account).
+If billing shows `False`, link a billing account in the console first (**Billing → Link a billing account**).
 
-## Step 1 — Create the admin sign-in OAuth client
+## Step 1 — Create your config file
 
-The admin UI uses "Sign in with Google", so create one OAuth client (one time):
-
-1. In the console: **APIs & Services → OAuth consent screen** → User type **Internal** → app name `gws-connector` → Save.
-2. **APIs & Services → Credentials → Create credentials → OAuth client ID** → type **Web application**, name `gws-connector`.
-3. Under **Authorized redirect URIs** add `http://localhost:8080/auth/callback` (for the `proxy` access in Step 4).
-4. Copy the **Client ID** and **Client secret** — you will paste them in the next step.
-
-## Step 2 — Put your SOCRadar feed key in a file
-
-Replace `YOUR_FEED_KEY` with your SOCRadar feed API key (the file holds only the key):
+Run the setup helper once. It copies the template to your own **`deploy/customer.env`** (git-ignored, so your
+secrets never commit) and opens it in the editor:
 
 ```bash
-echo "YOUR_FEED_KEY" > "$HOME/feed-key.txt"
+bash deploy/setup.sh
 ```
+
+## Step 2 — Fill in your values
+
+Edit `deploy/customer.env` and replace the placeholders. Required:
+
+| Field | What |
+|-------|------|
+| `PROJECT` | your GCP project id |
+| `DOMAIN` | your verified Workspace domain, e.g. `acme.com` |
+| `ADMIN_SUBJECT` | a dedicated least-privilege admin to impersonate, e.g. `connector-bot@acme.com` (not a super-admin) |
+| `FEED_API_KEY` | your SOCRadar feed API key (paste it; the file is git-ignored) |
+| `FEED_COMPANY_ID` | your SOCRadar company id |
+
+Optional: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` add "Sign in with Google" to the admin UI (you can add
+them later). `DEPLOY_MODE` chooses `service` (default), `job`, or `both`. `STORAGE_BACKEND` chooses `sqlite`
+(default) or `firestore` (durable; required for `job`/`both`).
+
+Save the file.
 
 ## Step 3 — Deploy
 
-Fill in your values, then run the deploy script. It enables the APIs, creates a least-privilege
-service account, self-binds keyless domain-wide delegation, stores the feed key and audit key in
-Secret Manager, deploys a private Cloud Run service, and creates the periodic-scan scheduler job.
+Run the same command again. It validates the config and deploys:
 
 ```bash
-PROJECT="$(gcloud config get-value project)" \
-REGION=europe-west1 \
-ADMIN_SUBJECT=admin@your-domain.com \
-DOMAIN=your-domain.com \
-CUSTOMER_ID=my_customer \
-FEED_COMPANY_ID=YOUR_COMPANY_ID \
-FEED_KEY_FILE="$HOME/feed-key.txt" \
-GOOGLE_CLIENT_ID=YOUR_CLIENT_ID \
-GOOGLE_CLIENT_SECRET=YOUR_CLIENT_SECRET \
-bash deploy/deploy-to-gcp.sh
+bash deploy/setup.sh
 ```
 
-When it finishes it prints the service account **Client ID** and the four OAuth **scopes** — you need
-both in the next step.
+When it finishes it prints the service account **Client ID** and the four OAuth **scopes** — you need both in
+the next step.
 
 ## Step 4 — Authorize domain-wide delegation
 
-Your Workspace **super admin** authorizes the connector once, the customer's own way:
+Your Workspace **super admin** authorizes the connector once:
 
-1. Go to **admin.google.com → Security → Access and data control → API controls → Domain-wide delegation → Manage Domain Wide Delegation → Add new**.
-2. **Client ID**: paste the Client ID printed at the end of Step 3.
-3. **OAuth scopes**: paste the four scopes printed in Step 3 as one comma-separated line.
+1. **admin.google.com → Security → Access and data control → API controls → Domain-wide delegation → Manage
+   Domain Wide Delegation → Add new**.
+2. **Client ID**: paste the Client ID from Step 3.
+3. **OAuth scopes**: paste the four scopes from Step 3 as one comma-separated line.
 4. Authorize. Propagation is usually minutes (up to 24h).
 
 ## Step 5 — Open the panel and run a scan
 
-The service is private. Open it one of two ways:
-
-Quick (dev): tunnel to localhost (keep this running):
+The service is private. Tunnel to it (keep this running):
 
 ```bash
 gcloud run services proxy gws-connector --region=europe-west1
 ```
 
-Then open `http://localhost:8080`, sign in with Google, go to **Dashboard → Run scan**, and check
-**Flagged Users**.
+Open the Web Preview on port 8080, sign in, go to **Dashboard → Run scan**, then check **Flagged Users**.
 
-Real URL (recommended for production): put Identity-Aware Proxy in front:
+For a real production URL, put Identity-Aware Proxy in front:
 
 ```bash
 IAP_MEMBERS=user:admin@your-domain.com PROJECT="$(gcloud config get-value project)" REGION=europe-west1 SERVICE=gws-connector bash deploy/setup-iap.sh
