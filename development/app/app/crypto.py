@@ -43,4 +43,12 @@ def dec(token):
     try:
         return f.decrypt(token.encode()).decode()
     except InvalidToken:
+        # A Fernet token is url-safe-b64 of a frame whose first byte is 0x80 -> it always begins with "gAAAAA".
+        # If the value LOOKS like a token but won't decrypt, the KEK was rotated/lost and the ciphertext is
+        # unrecoverable; returning it as "plaintext" would feed garbage to the SOCRadar API (silent auth fail).
+        # Fail loud instead. A value that does NOT look like a token is a genuine legacy-plaintext row -> as-is.
+        if isinstance(token, str) and token.startswith("gAAAAA"):
+            raise RuntimeError("feed-key decryption failed: FERNET_KEY was rotated or lost and the stored "
+                               "ciphertext is unrecoverable. Restore the original FERNET_KEY, or re-enter the "
+                               "feed key in Settings so it is re-encrypted under the current key.")
         return token  # legacy plaintext written before encryption was enabled

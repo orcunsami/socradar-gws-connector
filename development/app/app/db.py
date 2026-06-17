@@ -48,10 +48,19 @@ def ensure_default_tenant():
     """Seed the single bootstrap tenant from env if none exists. Feed key stored encrypted."""
     if _b.tenant_exists(settings.default_customer_id):
         return
+    # Never persist [""] when DEFAULT_DOMAIN is unset — an empty-string domain matches no real email and
+    # silently makes every scan return found=0. An empty list is the honest "no domains yet" state.
+    domains = [settings.default_domain] if settings.default_domain else []
     _b.create_tenant(
         settings.default_customer_id, settings.default_domain or "Default tenant",
-        [settings.default_domain], settings.feed_base, settings.feed_company_id,
+        domains, settings.feed_base, settings.feed_company_id,
         crypto.enc(settings.feed_api_key), settings.feed_start_date)
+    # Carry the deploy-wide FEED_LOOKBACK_DAYS default onto the tenant so the per-tenant value is the single
+    # source of truth (service._effective_start_date no longer applies the global as a runtime override).
+    if settings.feed_lookback_days:
+        t = first_tenant()
+        if t:
+            update_tenant(t["id"], feed_lookback_days=settings.feed_lookback_days)
 
 
 # ---------- tenants (encryption boundary) ----------
@@ -136,6 +145,17 @@ def pause_scan(scan_id, now, cursor):
 
 def get_active_scan(tenant_id):
     return _b.get_active_scan(tenant_id)
+
+
+def cancel_active_scan(tenant_id):
+    """Abort any in-flight (possibly budget-paused) scan so the NEXT scan starts fresh from the CURRENT config.
+    Used when the feed window/credentials change: a resume would otherwise reuse the scan's stored window_start
+    (captured under the old config) and silently ignore the change."""
+    a = _b.get_active_scan(tenant_id)
+    if not a:
+        return False
+    _b.finish_scan(a["id"], time.time(), status="aborted")
+    return True
 
 
 def last_scan(tenant_id):

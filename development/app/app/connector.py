@@ -198,6 +198,17 @@ def get_dwd_token(scopes: list[str], subject: str = None, service_account: str =
 
 
 # ---------- feed ----------
+def _as_int(v, default):
+    """Coerce a feed-supplied count to int. The pagination stop uses `page*limit >= total`, so a string
+    total_data_count (API drift / proxy) would raise TypeError mid-scan — fall back to the running default."""
+    if v is None:
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def socradar_fetch(base, company_id, api_key, source, start_date, limit=None, max_pages=None):
     """Fetch one SOCRadar source. Sanitizes: only password_present kept, never plaintext. Returns
     (records, total, processed, truncated): `processed` = how many records we actually paged through,
@@ -221,7 +232,7 @@ def socradar_fetch(base, company_id, api_key, source, start_date, limit=None, ma
         recs = payload.get("data") or []
         if not isinstance(recs, list):                # malformed body -> clean error, never a crash
             raise ConnectorError(f"feed {source} data not a list: {type(recs).__name__}")
-        total = payload.get("total_data_count", total)
+        total = _as_int(payload.get("total_data_count"), total)
         processed += len(recs)
         for rec in recs:
             # VIP records put the monitored value in `keyword` (can be an email) — read it too.
@@ -270,7 +281,7 @@ def stream_source(base, company_id, api_key, source, start_date, start_page=1, p
         recs = payload.get("data") or []
         if not isinstance(recs, list):
             raise ConnectorError(f"feed {source} data not a list: {type(recs).__name__}")
-        total = payload.get("total_data_count", total)
+        total = _as_int(payload.get("total_data_count"), total)
         if not recs:
             break                                    # RAW-empty page = source exhausted -> stop BEFORE yielding
         # `out` may be empty even though `recs` is not (a page of keyword-only / non-@ records, e.g. VIP brand

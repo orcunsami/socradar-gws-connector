@@ -325,9 +325,16 @@ def approval_approve(request: Request, approval_id: str, csrf: str = Form("")):
     if not db.set_approval_state(approval_id, "executed", user["email"], expect="pending"):
         return RedirectResponse("/approvals?err=state", status_code=303)
     result = service.remediate(t, ap["flagged_id"], ap["action"], user["email"], approved=True)
+    if not result.get("ok"):
+        # The action was claimed executed (CAS, line above) BEFORE remediate ran. If remediate then failed a
+        # gate (action since disabled, email's domain removed, lookup status changed), the approval would be
+        # left falsely 'executed' while nothing happened. Revert it to 'pending' so its state reflects reality
+        # and an admin can retry or reject. (The CAS already prevents a concurrent double-execution.)
+        db.set_approval_state(approval_id, "pending", user["email"], expect="executed")
     db.audit(t["id"], user["email"], f"approval_approve:{ap['action']}",
              "ok" if result.get("ok") else "fail", ap["email"], f"requested by {ap['requester']}")
-    return RedirectResponse("/approvals?approved=1", status_code=303)
+    return RedirectResponse("/approvals?approved=1" if result.get("ok") else "/approvals?err=remediate_failed",
+                            status_code=303)
 
 
 @app.post("/approvals/{approval_id}/reject")
@@ -436,16 +443,17 @@ def settings_save(request: Request, verified_domains: str = Form(""), feed_base:
     }
     if feed_api_key.strip():                 # only overwrite key if a new one was typed
         fields["feed_api_key"] = feed_api_key.strip()
-    # If the feed WINDOW changed, drop the incremental high-water mark so the NEXT scan actually honors the
-    # new window. Without this, once a tenant has scanned once _effective_start_date() returns at the
-    # high-water branch, and a new "Last 1 year" / custom start date silently does nothing (every scan keeps
-    # starting from the last run). Resetting forces one re-backfill from the new start, then it resumes incremental.
-    # Reset the incremental high-water (force a full re-read of the window on the next scan) when EITHER the
-    # window config changed OR the operator explicitly ticked "re-scan the full window" (covers the case where
-    # the lookback is already the desired value but the high-water is still pinned to an earlier short window).
+    # Drop the incremental high-water mark (force a full re-read of the window on the next scan) when the feed
+    # WINDOW changed, the feed CREDENTIALS changed (a different SOCRadar account/company has its own timeline),
+    # or the operator ticked "re-scan the full window". Otherwise once a tenant has scanned once,
+    # _effective_start_date() returns at the high-water branch and the new setting silently does nothing.
     cur_lookback = (t["feed_lookback_days"] if "feed_lookback_days" in t.keys() else 0) or 0
-    if reset_backfill or new_lookback != cur_lookback or new_start != t["feed_start_date"]:
+    feed_creds_changed = ((feed_base.strip() and feed_base.strip() != t["feed_base"])
+                          or (feed_company_id.strip() and feed_company_id.strip() != t["feed_company_id"])
+                          or bool(feed_api_key.strip()))
+    if reset_backfill or new_lookback != cur_lookback or new_start != t["feed_start_date"] or feed_creds_changed:
         fields["feed_high_water"] = ""
+        db.cancel_active_scan(t["id"])   # a paused scan would otherwise RESUME with its OLD stored window_start
     db.update_tenant(t["id"], **fields)
     db.audit(t["id"], user["email"], "settings", "ok",
              detail=f"domains={domains} actions={valid_actions}")

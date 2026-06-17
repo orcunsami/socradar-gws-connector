@@ -85,6 +85,13 @@ def _tenant_doc(snap):
     d.setdefault("auto_baseline_at", 0)
     d.setdefault("admin_subject", "")        # MSSP backfill: pre-change docs read '' -> global fallback
     d.setdefault("service_account", "")
+    # Firestore is schemaless: a doc created before a field existed (old migration / manual / import) would
+    # otherwise KeyError on the unguarded t["..."] accesses in routes + service. Backfill the same defaults
+    # the SQLite schema gives via NOT NULL DEFAULT, so both backends read identically.
+    d.setdefault("enabled_actions", "[]")
+    d.setdefault("verified_domains", "[]")
+    d.setdefault("feed_lookback_days", 0)
+    d.setdefault("feed_high_water", "")
     return d
 
 

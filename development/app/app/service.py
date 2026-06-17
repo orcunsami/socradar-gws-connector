@@ -52,9 +52,12 @@ def _effective_start_date(tenant) -> str:
                     - datetime.timedelta(days=max(0, settings.feed_overlap_days))).isoformat()
         except ValueError:
             pass   # malformed high-water -> fall through to the backfill window
+    # Per-tenant window is authoritative: 0 means "Custom date" (the UI label) -> fall through to
+    # feed_start_date. The deploy-wide FEED_LOOKBACK_DAYS default is SEEDED onto the tenant at creation
+    # (db.ensure_default_tenant), NOT applied here as a runtime override — otherwise an explicit "Custom date"
+    # (0) would be silently overridden by the global preset, and the Settings dropdown (which reads the
+    # per-tenant value) would show "Custom date" while the scan used the global rolling window.
     days = (tenant["feed_lookback_days"] if "feed_lookback_days" in tenant.keys() else 0) or 0
-    if not days:
-        days = settings.feed_lookback_days
     if days and days > 0:
         return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     return tenant["feed_start_date"]
