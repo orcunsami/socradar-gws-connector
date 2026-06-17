@@ -70,20 +70,25 @@ sd = service._effective_start_date(db.get_tenant(tid))
 chk("bug-state: high-water pins the start near today (not a year back)",
     sd >= (today - datetime.timedelta(days=30)).isoformat())
 
-# 2) operator picks 'Last 1 year' (365) in Settings
-r = _post_settings(365)
+# 2) operator picks 'Last 30 days' (30 = largest preset) in Settings
+r = _post_settings(30)
 chk("settings POST returns 303", r.status_code == 303)
 t = db.get_tenant(tid)
-chk("lookback persisted = 365 (int)", t["feed_lookback_days"] == 365)
+chk("lookback persisted = 30 (int)", t["feed_lookback_days"] == 30)
 chk("high-water RESET to '' on window change", (t["feed_high_water"] or "") == "")
 
-# 3) the NEXT scan now honors 'Last 1 year'
-expected = (today - datetime.timedelta(days=365)).isoformat()
-chk(f"effective start = today-365 ({expected})", service._effective_start_date(t) == expected)
+# 3) the NEXT scan now honors 'Last 30 days'
+expected = (today - datetime.timedelta(days=30)).isoformat()
+chk(f"effective start = today-30 ({expected})", service._effective_start_date(t) == expected)
+
+# also: a value above the largest preset (e.g. 365) is NOT accepted via the form -> coerced to 0 (Custom date)
+db.update_tenant(tid, feed_lookback_days=7)
+_post_settings(365)
+chk("365 rejected by the form -> coerced to 0 (no big-window preset)", db.get_tenant(tid)["feed_lookback_days"] == 0)
 
 # 4) a fresh scan re-sets high-water; saving the SAME window must NOT wipe it (no spurious re-backfill)
-db.update_tenant(tid, feed_high_water=today.isoformat())
-_post_settings(365)   # unchanged window
+db.update_tenant(tid, feed_lookback_days=30, feed_high_water=today.isoformat())
+_post_settings(30)   # unchanged window
 t = db.get_tenant(tid)
 chk("high-water KEPT when window unchanged", (t["feed_high_water"] or "") == today.isoformat())
 

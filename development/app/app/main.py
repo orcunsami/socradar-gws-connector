@@ -476,7 +476,9 @@ def settings_save(request: Request, verified_domains: str = Form(""), feed_base:
     asub = admin_subject.strip().lower()
     if asub and ("@" not in asub or not connector.in_verified_domains(asub, domains)):
         return RedirectResponse("/settings?err=adminsub", status_code=303)
-    new_lookback = feed_lookback_days if feed_lookback_days in (0, 1, 7, 30, 90, 182, 365) else 0
+    # largest preset is 30 days (1 month); a longer window must be set via a Custom start date (lookback=0).
+    # A wide rolling window times out the request and reads a lot of PII, so it is intentionally not a 1-click preset.
+    new_lookback = feed_lookback_days if feed_lookback_days in (0, 1, 7, 30) else 0
     new_start = feed_start_date.strip() or t["feed_start_date"]
     fields = {
         "verified_domains": json.dumps(domains),
