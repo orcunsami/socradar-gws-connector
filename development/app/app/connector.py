@@ -225,7 +225,16 @@ def socradar_fetch(base, company_id, api_key, source, start_date, limit=None, ma
         try:
             r = _get(url + "?" + q, headers)          # _get retries 429/5xx/transient, raises ConnectorError
         except urllib.error.HTTPError as e:
-            raise ConnectorError(f"feed {source} HTTP {e.code}: {e.read().decode()[:140]}") from e
+            # Distinguish a feed-SERVER outage (5xx, transient — wait) from a config error (401/403 — fix the
+            # key/company id) so the operator doesn't think the connector or their setup is broken. A 502/503/504
+            # is a SOCRadar feed gateway issue: the connector reached the feed and got an error RESPONSE.
+            if e.code >= 500:
+                raise ConnectorError(
+                    f"the SOCRadar feed is temporarily unavailable (HTTP {e.code} from its gateway for {source}) — "
+                    f"this is a feed-server outage, not the connector or your config; retry when the feed is back"
+                ) from e
+            hint = " — check the feed API key / company id" if e.code in (401, 403) else ""
+            raise ConnectorError(f"feed {source} HTTP {e.code}{hint}: {e.read().decode()[:140]}") from e
         if not isinstance(r, dict) or not r.get("is_success"):
             raise ConnectorError(f"feed {source} bad response: {str(r)[:120]}")
         payload = r.get("data") or {}
