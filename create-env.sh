@@ -137,7 +137,10 @@ USE_IAP=true
 #GOOGLE_CLIENT_SECRET=
 
 DEPLOY_MODE=service
-STORAGE_BACKEND=sqlite
+# Durable storage. firestore (recommended, default) = audit log + flagged users + scan history SURVIVE
+# restart/scale-to-zero; setup.sh auto-creates the database for you. sqlite = in-memory /tmp, resets when the
+# service goes idle — fine only for a throwaway demo.
+STORAGE_BACKEND=firestore
 EOF
 
 if [ ! -s "$CFG" ]; then

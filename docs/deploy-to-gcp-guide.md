@@ -233,18 +233,19 @@ gcloud secrets list --project=your-gcp-project       # empty
 ---
 
 ## Known limitations (v1) — honest
-- **Durable state via Firestore (recommended for prod).** By default the app uses SQLite at `/tmp` which
-  is per-instance and resets on restart/scale-to-zero (fine for a demo, NOT for audit history). For durable,
-  cross-instance state set `STORAGE_BACKEND=firestore` — the deploy script enables the Firestore API, grants
-  the runtime SA `roles/datastore.user`, and passes `STORAGE_BACKEND`/`PROJECT_ID`. One-time prerequisite —
-  create a Native-mode Firestore database in the project:
+- **Durable state via Firestore (the DEFAULT now).** `STORAGE_BACKEND=firestore` is the default in
+  `create-env.sh` / `customer.env.example`, so the audit log, flagged users and scan history **persist** across
+  restarts and scale-to-zero. The deploy script does the whole setup for you: enables the Firestore API, grants
+  the runtime SA `roles/datastore.user`, **auto-creates the (default) Native-mode database** in your region
+  (idempotent), and best-effort creates the `/audit` composite index (`audit_log: tenant_id ASC, ts DESC`; the
+  app falls back to a bounded read until it builds). No manual database step. Same ambient SA auth as DWD.
   ```bash
-  gcloud firestore databases create --location=europe-west1 --project=your-gcp-project
-  STORAGE_BACKEND=firestore PROJECT=your-gcp-project ... bash deploy/deploy-to-gcp.sh
+  # one command — Firestore is set up automatically:
+  STORAGE_BACKEND=firestore PROJECT=your-gcp-project REGION=europe-west1 bash deploy/deploy-to-gcp.sh
   ```
-  (Same code, same ambient SA auth as DWD; the Firestore emulator tests it billing-free. For an efficient
-  `/audit` view at scale, create the composite index `audit_log: tenant_id ASC, ts DESC` — the app falls
-  back to a bounded full read until it exists.)
+  Switch to `STORAGE_BACKEND=sqlite` ONLY for a throwaway demo (in-memory `/tmp`, resets on idle — NOT for
+  audit history). Note: separate from app state, Cloud Run **request/stdout logs always persist** in Cloud
+  Logging (`gcloud run services logs read`), regardless of backend.
 - **At-rest feed-key encryption (optional).** Set a stable `FERNET_KEY` (generate once with
   `python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"`, store in
   Secret Manager, inject pinned: `gcloud run services update gws-connector --region=REGION
@@ -252,8 +253,8 @@ gcloud secrets list --project=your-gcp-project       # empty
   plaintext (backward-compat). ⚠️ Generate the key ONCE and never lose it — a changed key makes stored
   ciphertext undecryptable.
 - **Automated scanning is available** via the headless `POST /tasks/scan` endpoint + Cloud Scheduler
-  (see below). Manual "Run scan" in the UI also works. (Durable history still needs the Cloud SQL/
-  Firestore fix above; until then each scan's results live only until the next restart.)
+  (see below). Manual "Run scan" in the UI also works. With the default Firestore backend, scan history +
+  flagged users + the audit trail **persist** across restarts/scale-to-zero.
 - **Admin UI access** requires `gcloud run services proxy` or IAP (service is private by design).
   A public login page (`--allow-unauthenticated` + the app's Google OAuth) is possible but needs an
   OAuth client + Internal consent screen configured in the customer project.

@@ -93,12 +93,23 @@ $GC secrets add-iam-policy-binding audit-hmac-key \
 
 STORAGE_BACKEND="${STORAGE_BACKEND:-sqlite}"
 if [ "$STORAGE_BACKEND" = "firestore" ]; then
-  echo "==> [4b/6] Durable storage: enable Firestore + grant runtime SA datastore.user"
+  echo "==> [4b/6] Durable storage: Firestore (audit + flagged + scan history survive restart/scale-to-zero)"
   $GC services enable firestore.googleapis.com --project="$PROJECT"
   $GC projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:$SA" --role="roles/datastore.user" --condition=None >/dev/null 2>&1 || true
-  echo "    NOTE: a Firestore (Native mode) database must exist — one-time, if not yet created:"
-  echo "      gcloud firestore databases create --location=$REGION --project=$PROJECT"
+  # Auto-create the (default) Native-mode database so the customer never has to. Idempotent: a re-run just
+  # hits 'already exists' (the || branch). Native mode is the default when --type is omitted.
+  echo "    Ensuring the Firestore (default) Native-mode database exists in $REGION (one-time, ~30s)..."
+  $GC firestore databases create --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 \
+    && echo "    + Firestore (default) database created." \
+    || echo "    + Firestore (default) database already exists."
+  # Best-effort composite index so the /audit view stays fast as the log grows (the app falls back to a
+  # bounded read until it builds; index build is async/minutes). Safe to ignore if it already exists.
+  $GC firestore indexes composite create --collection-group=audit_log \
+    --field-config=field-path=tenant_id,order=ascending \
+    --field-config=field-path=ts,order=descending \
+    --project="$PROJECT" >/dev/null 2>&1 \
+    && echo "    + /audit composite index requested (builds in the background)." || true
 fi
 
 ANALYTICS_BIGQUERY="${ANALYTICS_BIGQUERY:-false}"

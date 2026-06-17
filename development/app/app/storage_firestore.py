@@ -143,25 +143,32 @@ def update_tenant(tenant_id, **fields):
 # ---------- flagged users ----------
 def upsert_flagged(tenant_id, email, sources, lookup_status, now, socradar_refs=None):
     """UNION sources + socradar_refs on conflict (ADR-0001 #3: a streamed scan upserts the same email from
-    separate sources/pages). The per-tenant scan lease guarantees a single writer."""
+    separate sources/pages). ATOMIC read-merge-write under a Firestore transaction (parity with sqlite's
+    BEGIN IMMEDIATE) — two near-simultaneous source merges for the same email can never lose sources, even if
+    the per-tenant scan lease is ever bypassed (scale-out / clock skew / bug)."""
     fid = _flagged_id(tenant_id, email)
     new_refs = list(socradar_refs or [])
     ref = _db().collection(_FLAGGED).document(fid)
-    snap = ref.get()
-    if snap.exists:
-        d = snap.to_dict() or {}
-        merged_sources = sorted(set(sources) | set(json.loads(d.get("sources") or "[]")))
-        old_refs = json.loads(d.get("socradar_refs") or "[]")
-        merged_refs = old_refs + [r for r in new_refs if r not in old_refs]
-        # don't let a TRANSIENT blip (error_*) downgrade an already-found user (would block remediation).
-        ls = "found" if (d.get("lookup_status") == "found" and str(lookup_status).startswith("error_")) else lookup_status
-        ref.update({"sources": json.dumps(merged_sources), "lookup_status": ls,
-                    "last_seen": now, "socradar_refs": json.dumps(merged_refs)})
-    else:
-        ref.set({"id": fid, "tenant_id": tenant_id, "email": email,
-                 "sources": json.dumps(sorted(set(sources))), "lookup_status": lookup_status,
-                 "status": "open", "first_seen": now, "last_seen": now, "remediated_at": None,
-                 "socradar_refs": json.dumps(new_refs), "socradar_close_status": None})
+
+    @firestore.transactional
+    def _upsert(tx):
+        snap = ref.get(transaction=tx)
+        if snap.exists:
+            d = snap.to_dict() or {}
+            merged_sources = sorted(set(sources) | set(json.loads(d.get("sources") or "[]")))
+            old_refs = json.loads(d.get("socradar_refs") or "[]")
+            merged_refs = old_refs + [r for r in new_refs if r not in old_refs]
+            # don't let a TRANSIENT blip (error_*) downgrade an already-found user (would block remediation).
+            ls = "found" if (d.get("lookup_status") == "found" and str(lookup_status).startswith("error_")) else lookup_status
+            tx.update(ref, {"sources": json.dumps(merged_sources), "lookup_status": ls,
+                            "last_seen": now, "socradar_refs": json.dumps(merged_refs)})
+        else:
+            tx.set(ref, {"id": fid, "tenant_id": tenant_id, "email": email,
+                         "sources": json.dumps(sorted(set(sources))), "lookup_status": lookup_status,
+                         "status": "open", "first_seen": now, "last_seen": now, "remediated_at": None,
+                         "socradar_refs": json.dumps(new_refs), "socradar_close_status": None})
+
+    _upsert(_db().transaction())
     return fid
 
 

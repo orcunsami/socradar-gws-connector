@@ -58,8 +58,9 @@ bash setup.sh
 
 It enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation,
 stores your feed key and the audit key in Secret Manager, and deploys a private Cloud Run service (plus the
-periodic-scan scheduler). When it finishes it prints the service account **Client ID** and the four OAuth
-**scopes** — you need both in the next step.
+periodic-scan scheduler). It also sets up **durable Firestore storage automatically** (the default) — so your
+audit log, flagged users and scan history **persist** across restarts and idle, instead of resetting. When it
+finishes it prints the service account **Client ID** and the four OAuth **scopes** — you need both in the next step.
 
 ## 4) Authorize domain-wide delegation (one manual step)
 

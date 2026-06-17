@@ -41,9 +41,9 @@ Edit `deploy/customer.env` and replace the placeholders. Required:
 | `FEED_API_KEY` | your SOCRadar feed API key (paste it; the file is git-ignored) |
 | `FEED_COMPANY_ID` | your SOCRadar company id |
 
-Optional: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` add "Sign in with Google" to the admin UI (you can add
-them later). `DEPLOY_MODE` chooses `service` (default), `job`, or `both`. `STORAGE_BACKEND` chooses `sqlite`
-(default) or `firestore` (durable; required for `job`/`both`).
+Sign-in is native IAP (run `bash enable-iap.sh` after deploy) — no OAuth client needed. `DEPLOY_MODE` chooses
+`service` (default), `job`, or `both`. `STORAGE_BACKEND` is `firestore` (default, durable — audit/flagged/scan
+history persist; setup.sh auto-creates the database); `sqlite` is in-memory `/tmp` for a throwaway demo only.
 
 Save the file.
 
