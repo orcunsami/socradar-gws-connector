@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     allowed_domain: str = ""                      # hd claim must match (the customer's Workspace domain)
+    # Where Google returns the user after sign-in. We CANNOT derive this from the request: behind
+    # `gcloud run services proxy` the request Host is the *.run.app URL (the proxy rewrites it), so
+    # request.url_for would emit a run.app redirect that is not a registered/​reachable callback. Set this
+    # to the URL the BROWSER actually uses — http://localhost:8080 for a local `gcloud run services proxy`,
+    # or your IAP/real domain. It must match an Authorized redirect URI on the OAuth client. Empty -> fall
+    # back to request.url_for (only correct when the app is reached directly, e.g. behind IAP on its real URL).
+    oauth_redirect_base: str = "http://localhost:8080"
 
     # connector identity (keyless DWD). On Cloud Run, auth is the ambient metadata token (gcloud_path unused).
     gcloud_path: str = "gcloud"                   # local-dev fallback only; resolved from PATH

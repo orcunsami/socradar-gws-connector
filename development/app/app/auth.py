@@ -50,7 +50,12 @@ async def start_login(request: Request):
     if not settings.oauth_configured:
         raise HTTPException(503, "Sign-in is not configured. Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET "
                                  "(a Web OAuth client with this service's /auth/callback URL), then redeploy.")
-    redirect_uri = str(request.url_for("auth_callback"))
+    # Behind `gcloud run services proxy` the request Host is the *.run.app URL, so request.url_for would
+    # emit a redirect that is neither registered nor browser-reachable. Use the configured base (the URL the
+    # browser actually uses, e.g. http://localhost:8080 for a local proxy). Empty -> derive from the request
+    # (correct only when reached directly, e.g. behind IAP on its real URL).
+    base = (settings.oauth_redirect_base or "").rstrip("/")
+    redirect_uri = f"{base}/auth/callback" if base else str(request.url_for("auth_callback"))
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
