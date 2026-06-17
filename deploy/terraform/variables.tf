@@ -145,6 +145,6 @@ variable "feed_overlap_days" {
 
 variable "scan_schedule" {
   type        = string
-  default     = "0 */6 * * *"
-  description = "Cron schedule for the scan Job trigger (Cloud Scheduler)."
+  default     = "*/30 * * * *"
+  description = "Cron tick for the scan Job trigger (Cloud Scheduler); the per-tenant Auto-scan interval gates which scans actually run."
 }
