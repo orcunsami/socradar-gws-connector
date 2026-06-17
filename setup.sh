@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# SOCRadar Google Workspace Connector — one-command seamless deploy (Cloud Shell friendly).
+# SOCRadar Google Workspace Connector — one-command deploy (Cloud Shell friendly).
 #
 # Usage (in YOUR Google Cloud Shell, after clicking "Open in Cloud Shell"):
-#   bash deploy/setup.sh
+#   bash setup.sh
 #
-# Easiest start: run  bash helper/create-env.sh  first — it auto-detects your project/domain and writes
+# Easiest start: run  bash create-env.sh  first — it auto-detects your project/domain and writes
 # deploy/customer.env for you, leaving only the SOCRadar feed key. Then run this to deploy.
 # Otherwise, first run here creates a blank deploy/customer.env from the template and opens it to fill;
 # second run (config filled) validates everything and deploys the connector to YOUR Google Cloud project.
@@ -14,9 +14,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
-CFG="$HERE/customer.env"
-EXAMPLE="$HERE/customer.env.example"
+CFG="$HERE/deploy/customer.env"
+EXAMPLE="$HERE/deploy/customer.env.example"
 GC="${GCLOUD:-gcloud}"
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -28,14 +27,14 @@ die()  { printf '\n\033[0;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 if [ ! -f "$CFG" ]; then
   cp "$EXAMPLE" "$CFG"
   say "Created your config file: deploy/customer.env"
-  echo "   TIP: instead of filling this by hand, run  bash helper/create-env.sh  — it auto-detects your"
+  echo "   TIP: instead of filling this by hand, run  bash create-env.sh  — it auto-detects your"
   echo "        project, domain and region and leaves only the SOCRadar feed key + company id for you."
   echo "   Or fill in YOUR values (project, domain, admin, SOCRadar feed key) here, SAVE, then run again:"
-  echo "       bash deploy/setup.sh"
+  echo "       bash setup.sh"
   # In Cloud Shell, 'cloudshell edit' opens the file in the built-in editor (IDE-like).
   if command -v cloudshell >/dev/null 2>&1; then
     cloudshell edit "$CFG" || true
-    ok "Opened deploy/customer.env in the editor — fill it, save, then re-run 'bash deploy/setup.sh'."
+    ok "Opened deploy/customer.env in the editor — fill it, save, then re-run 'bash setup.sh'."
   else
     echo "   (Open deploy/customer.env in your editor, fill it, then re-run.)"
   fi
@@ -62,7 +61,7 @@ if [ "${#problems[@]}" -gt 0 ]; then
   for p in "${problems[@]}"; do echo "   - $p"; done
   echo
   command -v cloudshell >/dev/null 2>&1 && cloudshell edit "$CFG" || true
-  die "Config incomplete — edit deploy/customer.env, save, and run 'bash deploy/setup.sh' again."
+  die "Config incomplete — edit deploy/customer.env, save, and run 'bash setup.sh' again."
 fi
 ok "Config is filled in. (Note: ADMIN_SUBJECT must be a REAL existing admin — that is checked when you run a scan, not here. If a scan later returns 0 users or a 403, ADMIN_SUBJECT likely does not exist; fix it and redeploy.)"
 
@@ -100,11 +99,11 @@ case "${DEPLOY_MODE:-service}" in
   service|both)
     if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
       printf '\n\033[0;31mThe admin-UI SERVICE needs a Google sign-in method, or its container will not start.\033[0m\n'
-      echo "Do ONE of these, then run 'bash deploy/setup.sh' again:"
+      echo "Do ONE of these, then run 'bash setup.sh' again:"
       echo "  A) Create a Web OAuth client (one time) and set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in deploy/customer.env:"
       echo "       APIs & Services -> OAuth consent screen -> Internal -> save"
       echo "       APIs & Services -> Credentials -> Create credentials -> OAuth client ID -> Web application"
-      echo "       Authorized redirect URI:  http://localhost:8080/auth/callback   (for 'gcloud run services proxy' access)"
+      echo "       Authorized redirect URI:  http://localhost:8080/auth/callback   (for the proxy / open-panel.sh access)"
       echo "       copy the Client ID + secret into deploy/customer.env"
       echo "  B) Just want a headless scan test (no UI)? Set in deploy/customer.env:  DEPLOY_MODE=job  and  STORAGE_BACKEND=firestore"
       command -v cloudshell >/dev/null 2>&1 && cloudshell edit "$CFG" || true
@@ -114,10 +113,10 @@ case "${DEPLOY_MODE:-service}" in
 esac
 
 case "${DEPLOY_MODE:-service}" in
-  service) say "Deploying the Cloud Run SERVICE (admin UI + scheduled scans)"; bash "$HERE/deploy-to-gcp.sh" ;;
-  job)     say "Deploying the Cloud Run JOB (large-feed backfill, no request timeout)"; bash "$HERE/deploy-job.sh" ;;
-  both)    say "Deploying the SERVICE then the JOB"; bash "$HERE/deploy-to-gcp.sh"; STORAGE_BACKEND=firestore bash "$HERE/deploy-job.sh" ;;
+  service) say "Deploying the Cloud Run SERVICE (admin UI + scheduled scans)"; bash "$HERE/deploy/deploy-to-gcp.sh" ;;
+  job)     say "Deploying the Cloud Run JOB (large-feed backfill, no request timeout)"; bash "$HERE/deploy/deploy-job.sh" ;;
+  both)    say "Deploying the SERVICE then the JOB"; bash "$HERE/deploy/deploy-to-gcp.sh"; STORAGE_BACKEND=firestore bash "$HERE/deploy/deploy-job.sh" ;;
   *) die "DEPLOY_MODE must be service | job | both (got '${DEPLOY_MODE:-}')" ;;
 esac
 
-say "Done. The connector is deployed in YOUR project ($PROJECT). The one manual step (domain-wide delegation) is printed above."
+say "Done. The connector is deployed in YOUR project ($PROJECT). The one manual step (domain-wide delegation) is printed above. Open the admin UI with:  bash open-panel.sh"

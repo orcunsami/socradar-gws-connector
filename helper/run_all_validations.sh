@@ -59,7 +59,7 @@ cat <<EOF
   FEED_COMPANY_ID=  your SOCRadar company id
 
 EASIEST: let the helper write deploy/customer.env for you, then add only the feed key:
-  bash helper/create-env.sh     # fills PROJECT/REGION/DOMAIN/ADMIN_SUBJECT/CUSTOMER_ID, asks which project
+  bash create-env.sh            # fills PROJECT/REGION/DOMAIN/ADMIN_SUBJECT/CUSTOMER_ID, asks which project
   # then paste FEED_API_KEY + FEED_COMPANY_ID into deploy/customer.env, save, and:
-  bash deploy/setup.sh
+  bash setup.sh
 EOF

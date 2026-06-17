@@ -33,15 +33,15 @@ Two ways. Most customers use the button.
 
 ### Option 1: Open in Cloud Shell (recommended)
 
-Click the button at the top. Google Cloud Shell opens in your browser, this repository cloned, `deploy/customer.env.example` already open in the editor, and a step-by-step tutorial in the side panel. No local install.
+Click the button at the top. Google Cloud Shell opens in your browser with this repository cloned and a step-by-step tutorial in the side panel. No local install. Three scripts at the top of the project run the whole flow, in order:
 
-The flow is one config file and one command:
+1. **`bash create-env.sh`** — auto-detects your project, domain and region and writes `deploy/customer.env` for you (git-ignored). You add only your SOCRadar feed key + company id.
+2. **Create a sign-in OAuth client** (one time, for the admin UI) and paste its id/secret into `deploy/customer.env` — the side-panel tutorial shows the exact clicks.
+3. **`bash setup.sh`** — validates and deploys: enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation, stores the feed key and the audit key in Secret Manager, deploys a private Cloud Run service, and creates the periodic-scan scheduler. It prints the service account client id + the four scopes.
+4. **Authorize domain-wide delegation** in `admin.google.com` (paste that client id + scopes).
+5. **`bash open-panel.sh`** — opens the admin UI (reads your project/region from the config); then use Cloud Shell Web Preview on port 8080.
 
-1. Run `bash deploy/setup.sh` once. It creates your private `deploy/customer.env` (git-ignored) and opens it.
-2. Fill in your project, domain, impersonation admin, and SOCRadar feed key. Save.
-3. Run `bash deploy/setup.sh` again. It validates everything and deploys.
-
-Under the hood the deploy enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation, stores the feed key and the audit key in Secret Manager, deploys a private Cloud Run service, and creates the periodic-scan scheduler job. At the end it prints the service account client id.
+For a headless scan test with no UI (and no OAuth client), set `DEPLOY_MODE=job` + `STORAGE_BACKEND=firestore` in `deploy/customer.env` before step 3.
 
 One manual step remains: your Workspace super admin authorizes that client id for the four directory scopes in `admin.google.com`, their own way.
 

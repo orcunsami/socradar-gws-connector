@@ -26,7 +26,7 @@ Run the setup helper once. It copies the template to your own **`deploy/customer
 secrets never commit) and opens it in the editor:
 
 ```bash
-bash deploy/setup.sh
+bash setup.sh
 ```
 
 ## Step 2 — Fill in your values
@@ -52,7 +52,7 @@ Save the file.
 Run the same command again. It validates the config and deploys:
 
 ```bash
-bash deploy/setup.sh
+bash setup.sh
 ```
 
 When it finishes it prints the service account **Client ID** and the four OAuth **scopes** — you need both in
