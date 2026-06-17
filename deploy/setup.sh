@@ -5,8 +5,10 @@
 # Usage (in YOUR Google Cloud Shell, after clicking "Open in Cloud Shell"):
 #   bash deploy/setup.sh
 #
-# First run: creates deploy/customer.env from the template and opens it in the editor for you to fill.
-# Second run (config filled): validates everything, then deploys the connector to YOUR Google Cloud project.
+# Easiest start: run  bash helper/create-env.sh  first — it auto-detects your project/domain and writes
+# deploy/customer.env for you, leaving only the SOCRadar feed key. Then run this to deploy.
+# Otherwise, first run here creates a blank deploy/customer.env from the template and opens it to fill;
+# second run (config filled) validates everything and deploys the connector to YOUR Google Cloud project.
 # Nothing is hosted by SOCRadar — it runs in your project, keyless (no service-account key file).
 #
 set -euo pipefail
@@ -26,7 +28,9 @@ die()  { printf '\n\033[0;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 if [ ! -f "$CFG" ]; then
   cp "$EXAMPLE" "$CFG"
   say "Created your config file: deploy/customer.env"
-  echo "   Fill in YOUR values (project, domain, admin, SOCRadar feed key), SAVE, then run this again:"
+  echo "   TIP: instead of filling this by hand, run  bash helper/create-env.sh  — it auto-detects your"
+  echo "        project, domain and region and leaves only the SOCRadar feed key + company id for you."
+  echo "   Or fill in YOUR values (project, domain, admin, SOCRadar feed key) here, SAVE, then run again:"
   echo "       bash deploy/setup.sh"
   # In Cloud Shell, 'cloudshell edit' opens the file in the built-in editor (IDE-like).
   if command -v cloudshell >/dev/null 2>&1; then
@@ -60,7 +64,7 @@ if [ "${#problems[@]}" -gt 0 ]; then
   command -v cloudshell >/dev/null 2>&1 && cloudshell edit "$CFG" || true
   die "Config incomplete — edit deploy/customer.env, save, and run 'bash deploy/setup.sh' again."
 fi
-ok "Config looks complete."
+ok "Config is filled in. (Note: ADMIN_SUBJECT must be a REAL existing admin — that is checked when you run a scan, not here. If a scan later returns 0 users or a 403, ADMIN_SUBJECT likely does not exist; fix it and redeploy.)"
 
 # ---------- 3) gcloud preflight ----------
 say "Checking gcloud (auth, project, billing)"

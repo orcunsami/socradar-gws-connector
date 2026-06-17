@@ -5,8 +5,10 @@
 #         (no argument = your currently selected project)
 #
 set -uo pipefail
+GC="${GCLOUD:-gcloud}"
+gc_stderr(){ "$GC" "$@" 2>&1 1>/dev/null; }
 
-PROJECT="${1:-$(gcloud config get-value project 2>/dev/null)}"
+PROJECT="${1:-$($GC config get-value project 2>/dev/null)}"
 if [ -z "$PROJECT" ] || [ "$PROJECT" = "(unset)" ]; then
   echo "No project given and none selected."
   echo "Usage: bash helper/check_billing.sh YOUR_PROJECT_ID"
@@ -14,11 +16,12 @@ if [ -z "$PROJECT" ] || [ "$PROJECT" = "(unset)" ]; then
   exit 1
 fi
 
-raw="$(gcloud billing projects describe "$PROJECT" 2>&1 || true)"
-if printf '%s' "$raw" | grep -qiE 'reauth|auth tokens|credentials|unauthenticated|gcloud auth login'; then
-  echo "Your gcloud session needs a refresh. Run:  gcloud auth login   then run this again."
-  exit 1
+err="$(gc_stderr billing projects describe "$PROJECT" || true)"
+if printf '%s' "$err" | grep -qiE 'reauth|invalid_grant|auth tokens|unauthenticated|gcloud auth login'; then
+  echo "Your gcloud session needs a refresh. Run:  gcloud auth login   then run this again."; exit 1
 fi
+
+raw="$($GC billing projects describe "$PROJECT" 2>/dev/null || true)"
 EN="$(printf '%s' "$raw" | sed -n 's/^billingEnabled:[[:space:]]*//p')"
 ACC="$(printf '%s' "$raw" | sed -n 's/^billingAccountName:[[:space:]]*//p')"
 [ -n "$EN" ] || EN="unknown"

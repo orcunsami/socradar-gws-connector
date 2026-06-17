@@ -23,7 +23,7 @@ set -euo pipefail
 GC="${GCLOUD:-gcloud}"
 PROJECT="${PROJECT:?set PROJECT (the customer GCP project id)}"
 REGION="${REGION:-europe-west1}"
-ADMIN_SUBJECT="${ADMIN_SUBJECT:?set ADMIN_SUBJECT (a real Workspace super-admin email to impersonate)}"
+ADMIN_SUBJECT="${ADMIN_SUBJECT:?set ADMIN_SUBJECT (a real, EXISTING Workspace admin email to impersonate — a least-priv connector-bot@ admin for production, or an existing admin for a quick test)}"
 DOMAIN="${DOMAIN:?set DOMAIN (the customer Workspace primary domain)}"
 CUSTOMER_ID="${CUSTOMER_ID:-my_customer}"
 FEED_KEY_FILE="${FEED_KEY_FILE:?set FEED_KEY_FILE (path to a file containing ONLY the SOCRadar feed API key)}"
@@ -196,6 +196,11 @@ admin.google.com -> Security -> Access and data control -> API controls ->
   https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/admin.directory.group.member
 
   -> Authorize. Propagation: usually minutes, up to 24h.
+
+  IMPORTANT: the connector impersonates  ADMIN_SUBJECT=$ADMIN_SUBJECT
+  If a later scan returns 0 users or a 403, that admin likely does not exist (or lacks
+  directory privileges) — create it with a least-privilege role, or set ADMIN_SUBJECT to
+  an existing admin, then redeploy.
 
 Service URL (PRIVATE — needs auth to open): $URL
   Open the admin UI locally:  gcloud run services proxy $SERVICE --region=$REGION --project=$PROJECT

@@ -13,68 +13,43 @@ You will:
 
 Click **Start** to begin.
 
-## See what you need (one helper)
+## Create your config (auto-filled)
 
-Not sure of your project id, billing, or domain? Run this one helper. It prints your account, your projects,
-billing status, and exactly what to put in the config. You do not need to know any gcloud commands:
-
-```sh
-bash helper/run_all_validations.sh
-```
-
-(Individually: `bash helper/list_project_ids.sh` lists your projects; `bash helper/check_billing.sh PROJECT_ID`
-checks billing for one.)
-
-## Pick your project
-
-Choose a project id from the helper output and set it:
+Run this one helper. It reads your account, projects, domain and billing, asks which project to deploy into,
+and writes **`deploy/customer.env`** for you (git-ignored, so your secrets never commit). You do not need to
+know any gcloud commands:
 
 ```sh
-gcloud config set project YOUR_PROJECT_ID
+bash helper/create-env.sh
 ```
 
-Confirm billing is on (Cloud Run, Secret Manager, and Scheduler need it):
+It fills in PROJECT, REGION, DOMAIN, ADMIN_SUBJECT and CUSTOMER_ID from what it detected, then opens
+<walkthrough-editor-open-file filePath="deploy/customer.env">deploy/customer.env</walkthrough-editor-open-file>
+in the editor.
 
-```sh
-gcloud billing projects describe "$(gcloud config get-value project)" --format='value(billingEnabled)'
-```
+(Just want to look first, without writing anything? `bash helper/run_all_validations.sh` prints the same
+information read-only.)
 
-If that prints `False`, link a billing account in the console (**Billing → Link a billing account**) before
-continuing.
+## Add your SOCRadar feed key
 
-## Create your config file
+In <walkthrough-editor-open-file filePath="deploy/customer.env">deploy/customer.env</walkthrough-editor-open-file>,
+fill the two values only you have, and save:
 
-Run the setup helper once. It copies the template to your own **`deploy/customer.env`** (which is
-git-ignored, so your secrets never get committed) and opens it in the editor:
-
-```sh
-bash deploy/setup.sh
-```
-
-The editor opens <walkthrough-editor-open-file filePath="deploy/customer.env">deploy/customer.env</walkthrough-editor-open-file>
-on the right.
-
-## Fill in your values
-
-Edit <walkthrough-editor-open-file filePath="deploy/customer.env">deploy/customer.env</walkthrough-editor-open-file>
-and replace the placeholders. The required fields are:
-
-- **PROJECT** — your GCP project id (the one you set above).
-- **DOMAIN** — your verified Workspace domain, e.g. `acme.com`.
-- **ADMIN_SUBJECT** — a dedicated least-privilege admin the connector impersonates, e.g. `connector-bot@acme.com`
-  (not a super-admin; the 7-privilege custom role is in `docs/deploy-to-gcp-guide.md`).
 - **FEED_API_KEY** — paste your SOCRadar feed API key.
 - **FEED_COMPANY_ID** — your SOCRadar company id.
 
-Optional: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` give the admin UI "Sign in with Google" (you can add
-these later and reach the UI through a proxy meanwhile). `DEPLOY_MODE` picks `service` (admin UI + scheduled
-scans, the default), `job` (large-feed backfill), or `both`.
+Also double-check **ADMIN_SUBJECT** — a dedicated least-privilege admin the connector impersonates (e.g.
+`connector-bot@yourdomain`, not a super-admin; the 7-privilege custom role is in `docs/deploy-to-gcp-guide.md`).
+For a quick test you can set it to an admin you already have.
+
+Optional: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` add the admin UI "Sign in with Google" (you can add these
+later). `DEPLOY_MODE` picks `service` (default), `job` (large-feed backfill), or `both`.
 
 **Save the file** (Cmd/Ctrl+S) when done.
 
 ## Deploy
 
-Run the same command again. This time it validates your config and deploys:
+Now deploy. This validates your config and builds everything:
 
 ```sh
 bash deploy/setup.sh
@@ -100,7 +75,7 @@ Your Workspace **super admin** authorizes the connector once, in your own Admin 
 The service is private. Tunnel to it from Cloud Shell (keep this running):
 
 ```sh
-gcloud run services proxy gws-connector --region="$(grep -E '^REGION=' deploy/customer.env | cut -d= -f2 | tr -d ' ' || echo europe-west1)"
+gcloud run services proxy gws-connector --project="$(grep -E '^PROJECT=' deploy/customer.env | cut -d= -f2 | tr -d ' ')" --region="$(grep -E '^REGION=' deploy/customer.env | cut -d= -f2 | tr -d ' ' || echo europe-west1)"
 ```
 
 Use the Cloud Shell **Web Preview** (port 8080), sign in, go to **Dashboard → Run scan**, then check
