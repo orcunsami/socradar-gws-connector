@@ -83,12 +83,25 @@ periodic-scan scheduler). When it finishes it prints the service account **Clien
 
 ## 5) Authorize domain-wide delegation (one manual step)
 
-Your Workspace **super admin** authorizes the connector once, in your own Admin console:
+Only a Workspace **super admin** can register a delegation (that is a Google requirement for the *registration
+action* — it does **not** mean the connector runs as a super admin). The connector itself is least-privilege: it
+impersonates the dedicated `ADMIN_SUBJECT` you set, and it is limited to the **four narrow Directory scopes**
+below (mostly read; the two write scopes are only for the specific remediation actions you enable). No Gmail,
+no Drive, no broad admin access.
+
+In your own Admin console:
 
 1. **admin.google.com → Security → Access and data control → API controls → Domain-wide delegation → Manage
    Domain Wide Delegation → Add new**.
-2. **Client ID**: paste the Client ID printed at the end of the deploy (step 4).
-3. **OAuth scopes**: paste the four scopes printed by the deploy, as one comma-separated line.
+2. **Client ID**: the **`bash setup.sh`** run printed this near the end as `Client ID: ...`. Paste that number.
+   (It is the service account's client id; the deploy also prints it again on its very last line so you do not
+   have to scroll.)
+3. **OAuth scopes**: paste exactly these four (already comma-separated, copy as one line):
+
+```text
+https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/admin.directory.group.member
+```
+
 4. Click **Authorize**. Propagation is usually minutes (up to 24h), so wait 2–3 minutes before scanning.
 
 ## 6) Open the panel and run a scan

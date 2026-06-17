@@ -212,3 +212,15 @@ Teardown:  bash deploy/cleanup.sh   (cost discipline — deletes service, secret
            the runtime SA + DWD authorization are left in place — both zero-cost IAM objects)
 ============================================================================
 EOF
+
+# Repeat the ONE action item as the very last lines, so it is not buried in the output above.
+cat <<EOF
+
+>>> NEXT STEP — authorize domain-wide delegation
+    admin.google.com -> Security -> Access and data control -> API controls
+                     -> Domain-wide delegation -> Manage Domain Wide Delegation -> Add new
+    Client ID:  $CLIENT_ID
+    OAuth scopes (paste as one comma-separated line):
+    https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/admin.directory.group.member
+    Then open the admin UI:  bash open-panel.sh
+EOF

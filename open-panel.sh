@@ -28,6 +28,18 @@ if [ -z "$PROJECT" ]; then
   echo "PROJECT is not set in deploy/customer.env. Run  bash create-env.sh  first."; exit 1
 fi
 
+# If something is already listening on $PORT, a proxy from a previous run is probably still up.
+# Starting a second one just fails with "address already in use" — give clear options instead.
+if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+  exec 3>&- 2>/dev/null || true
+  echo "Port $PORT is already in use — a proxy is probably still running from a previous run."
+  echo "  - Easiest: just use Cloud Shell Web Preview -> 'Preview on port $PORT' now (that proxy already works)."
+  echo "  - Or free it and re-run:   pkill -f 'run services proxy' ; bash open-panel.sh"
+  echo "  - Or use another port:     PORT=8081 bash open-panel.sh"
+  echo "    (a different port needs http://localhost:8081/auth/callback added to your OAuth client too)"
+  exit 0
+fi
+
 echo "Opening the admin UI for service '$SERVICE'  (project=$PROJECT, region=$REGION, port=$PORT)"
 echo "Once it says 'proxies to ...', click Cloud Shell's Web Preview -> 'Preview on port $PORT'."
 echo "(Keep this command running; Ctrl-C stops it.)"

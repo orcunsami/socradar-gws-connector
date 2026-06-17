@@ -119,4 +119,4 @@ case "${DEPLOY_MODE:-service}" in
   *) die "DEPLOY_MODE must be service | job | both (got '${DEPLOY_MODE:-}')" ;;
 esac
 
-say "Done. The connector is deployed in YOUR project ($PROJECT). The one manual step (domain-wide delegation) is printed above. Open the admin UI with:  bash open-panel.sh"
+say "Deploy complete ($PROJECT). Do the NEXT STEP printed just above (authorize domain-wide delegation), then: bash open-panel.sh"
