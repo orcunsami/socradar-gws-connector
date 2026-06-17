@@ -212,18 +212,6 @@ The customer chooses how exposures become action. **Default = `manual` (safest).
 - Recommended rollout: manual → semi_auto → auto-with-dry-run → auto. (v1.1 hardening: confirm-window,
   never-auto-on-first-scan baseline, rate-limit/cooldown, circuit-breaker, post-state verify, isAdmin auto-detect.)
 
-## Alternative: one-click deploy FORM (Cloud Run button) — the Azure-ARM-parameters equivalent
-`development/app/app.json` defines a deploy-time **form** that prompts for every setting above (the Azure
-custom-deployment-screen equivalent). Add to a PUBLIC deploy repo's README:
-```
-[![Run on Google Cloud](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run/?git_repo=https://github.com/ORG/REPO.git&dir=development/app)
-```
-⚠️ **Caveats (so it's honest):** the Cloud Run button (a) needs a **PUBLIC** repo (scrub secrets first —
-`Skill("pre-public-leak-scan")`), (b) **cannot set a specific runtime SA or Secret Manager secrets** — it
-stores the feed key as a **plain env var** and runs as the default compute SA. So the button is for a
-**quick/demo** deploy; for a **production-secure** deploy (keyless DWD SA + feed key in Secret Manager) use
-`deploy/deploy-to-gcp.sh`. `options.allow-unauthenticated` is `false` so the service is never public.
-
 ## Teardown (cost discipline)
 ```bash
 PROJECT=your-gcp-project REGION=europe-west1 bash deploy/cleanup.sh
@@ -318,8 +306,5 @@ client needed for the UI).
 
 ## Alternative distribution paths (documented, not the default)
 - **Terraform module** (`GoogleCloudPlatform/cloud-run/google//modules/v2`) for IaC customers.
-- **"Deploy to Cloud Run" button** (`deploy.cloud.run`) — lowest friction BUT needs a PUBLIC repo and
-  can't set a specific runtime SA or wire Secret Manager → only for a quick demo, not this production
-  flow. (Community-maintained, not an official Google product.)
 - **Google Cloud Marketplace** — weeks of partner onboarding + reviews; only for a paid GTM motion,
   and its "SaaS" type is vendor-hosted (not customer-self-deploy). Not used here.

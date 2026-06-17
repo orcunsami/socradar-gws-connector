@@ -31,7 +31,7 @@ basic safety (keyless DWD, least-privilege scopes, default-off remediation guard
 | **No detail leak** | Generic 500 handler — no stack trace / internal detail (could carry secrets/PII) to the client. | `main.py` exception handler |
 | **Startup transparency** | Logs env / cloud_run / oauth / dev_login_active / mode / feed-key-present at boot. | `main.py` `_startup` |
 | **Dedicated least-priv runtime SA** | Deploy uses `--service-account` (never the Editor-carrying default compute SA); SA gets only tokenCreator(self) + secretAccessor(one secret) + storage role if selected. | `deploy/deploy-to-gcp.sh` |
-| **Feed key via Secret Manager** | gcloud deploy uses `--set-secrets`; the one-click button is labeled DEV/EVAL-ONLY (plaintext-env limitation). | deploy script, app.json, deploy guide |
+| **Feed key via Secret Manager** | gcloud deploy uses `--set-secrets` so the feed key never lives in a plain env var. | deploy script, deploy guide |
 
 ## ✅ DONE — heavier P0 (this round, tested)
 | Control | What | Test |

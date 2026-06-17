@@ -26,7 +26,7 @@ blast radius** (auto-remediation can suspend/lock Workspace accounts), so the id
 | **Automated response** | **Enterprise ✓** (our strength) | Auto-remediation IS automated containment (signout/suspend/...) WITH guardrails: dry-run, blast-cap, kill-switch, **two-person approval for high-blast** ("automate bookkeeping, not decisions" — humans on the destructive decisions). |
 | **Input validation** | Foundation ✓ (for our surface) | Feed treated as untrusted: narrow extraction (email/alarmId only), `@`-check, verified-domain filter; form input CSRF + typed + action allow-list. Prompt-injection tier ~N/A (no LLM in path). |
 | **Output filtering** | Foundation ✓ | No PII/secret echo: redaction, generic 500, feed key never logged. |
-| **Config integrity** | Foundation partial | app.json/deploy in repo; Settings changes RBAC-gated + audited; container image immutable-ish. GAP: signed config/image is documented (supply-chain.md), not implemented. |
+| **Config integrity** | Foundation partial | deploy config in repo; Settings changes RBAC-gated + audited; container image immutable-ish. GAP: signed config/image is documented (supply-chain.md), not implemented. |
 | **Recovery** | Foundation ✓ | Cloud Run revision rollback; cleanup.sh teardown; per-action idempotency; `partial` status. No auto-rollback-on-health-fail (Ent). |
 | **AI governance** | Foundation partial | docs/security-hardening.md + EXP records + opt-in flags. Formal governance committee = customer org's job. |
 
