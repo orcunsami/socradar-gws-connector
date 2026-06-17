@@ -203,8 +203,10 @@ admin.google.com -> Security -> Access and data control -> API controls ->
   an existing admin, then redeploy.
 
 Service URL (PRIVATE — needs auth to open): $URL
-  Open the admin UI locally:  gcloud run services proxy $SERVICE --region=$REGION --project=$PROJECT
-  (or put Identity-Aware Proxy in front for browser access)
+  Open the admin UI:  bash helper/open-panel.sh   (reads project/region from customer.env; then in
+                      Cloud Shell click Web Preview -> "Preview on port 8080")
+  Manual equivalent:  gcloud run services proxy $SERVICE --region=$REGION --project=$PROJECT
+  (or put Identity-Aware Proxy in front for a real browser URL)
 
 Teardown:  bash deploy/cleanup.sh   (cost discipline — deletes service, secrets, build images, scheduler jobs;
            the runtime SA + DWD authorization are left in place — both zero-cost IAM objects)

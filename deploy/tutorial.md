@@ -87,16 +87,23 @@ Your Workspace **super admin** authorizes the connector once, in your own Admin 
 
 ## Open the panel and run a scan
 
-The service is private. Tunnel to it from Cloud Shell (keep this running):
+The service is private. Open it with one helper (it reads your project and region from `deploy/customer.env`,
+so you do not type any flags). Keep it running:
 
 ```sh
-gcloud run services proxy gws-connector --project="$(grep -E '^PROJECT=' deploy/customer.env | cut -d= -f2 | tr -d ' ')" --region="$(grep -E '^REGION=' deploy/customer.env | cut -d= -f2 | tr -d ' ' || echo europe-west1)"
+bash helper/open-panel.sh
 ```
 
-Use the Cloud Shell **Web Preview** (port 8080), sign in, go to **Dashboard → Run scan**, then check
+When it says `proxies to ...`, click Cloud Shell's **Web Preview → Preview on port 8080** (the monitor icon at
+the top-right of Cloud Shell). Sign in with a `@your-domain` account, go to **Dashboard → Run scan**, then check
 **Flagged Users**.
 
-For a real production URL, put Identity-Aware Proxy in front instead — see `deploy/setup-iap.sh`.
+If sign-in shows `redirect_uri_mismatch`, the error lists the exact callback URL the app used — copy it and add
+it under your OAuth client's **Authorized redirect URIs** (Console → Clients → your client), then sign in again.
+This happens because Cloud Shell's preview URL differs from `localhost`.
+
+For a real production URL (and to avoid the redirect step), put Identity-Aware Proxy in front instead — see
+`deploy/setup-iap.sh`.
 
 ## Clean up (return to zero cost)
 
