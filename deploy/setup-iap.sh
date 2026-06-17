@@ -24,8 +24,11 @@ echo "==> [1/6] Enable IAP API + create the IAP service agent (idempotent)"
 $GC services enable iap.googleapis.com --project="$PROJECT"
 $GC beta services identity create --service=iap.googleapis.com --project="$PROJECT" >/dev/null 2>&1 || true
 
-echo "==> [2/6] Enable IAP on the Cloud Run service (same run.app URL, no load balancer) + keep it private"
-$GC run services update "$SERVICE" --region="$REGION" --project="$PROJECT" --iap --no-allow-unauthenticated
+echo "==> [2/6] Enable IAP on the Cloud Run service (same run.app URL, no load balancer)"
+# The service is already private (deploy-to-gcp.sh deployed it with --no-allow-unauthenticated); --iap adds
+# the IAP gate in front of it. (Note: --no-allow-unauthenticated is a `run deploy` flag, not a `run services
+# update` flag — do not add it here.)
+$GC run services update "$SERVICE" --region="$REGION" --project="$PROJECT" --iap
 
 echo "==> [3/6] Let the IAP service agent invoke the service"
 $GC run services add-iam-policy-binding "$SERVICE" --region="$REGION" --project="$PROJECT" \
