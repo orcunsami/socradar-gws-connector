@@ -5,6 +5,18 @@
   <form method="post" action="/scan" data-scan><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit" data-busy-text="Scanning…">Re-scan</button></form>
 </div>
 
+{% if live_scan %}
+{# Live scan progress. /static/app.js polls POST /scans/{id}/tick to drive the remaining budget-chunks and
+   updates the counts; when the scan finishes it reloads the page to show the final flagged list. #}
+<div class="flash info scan-live" id="scan-live" data-scan-live="{{ live_scan.id }}" data-csrf="{{ csrf }}">
+  <b>Scanning…</b>
+  <span id="scan-live-msg">found <b id="scan-live-found">{{ live_scan.found }}</b>
+    · <span id="scan-live-sources">{{ live_scan.sources_done }}</span> source(s) done{% if live_scan.source %}
+    · reading <b id="scan-live-cur">{{ live_scan.source }}</b> page <span id="scan-live-page">{{ live_scan.page or 1 }}</span>{% endif %}</span>
+  <span class="muted small">— runs in the background; keep this page open, it refreshes when done.</span>
+</div>
+{% endif %}
+
 {% if not enabled %}
 <div class="flash warn">No remediation actions are enabled. Turn them on in <a href="/settings">Settings</a> to act on exposures.</div>
 {% endif %}

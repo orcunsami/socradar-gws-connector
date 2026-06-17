@@ -189,7 +189,8 @@ def scan(request: Request, csrf: str = Form("")):
         return RedirectResponse("/login", status_code=303)
     if not _check_csrf(request, csrf):
         return RedirectResponse("/?err=csrf", status_code=303)
-    result = service.run_scan(_active_tenant(request), user["email"])
+    t = _active_tenant(request)
+    result = service.run_scan(t, user["email"])
     # a budget-bounded scan can return part-way (more=True) or refuse if one is already running (busy=True);
     # don't flash a FALSE "completed" on a partial, and don't flash "failed" on a busy.
     if result.get("more"):
@@ -200,7 +201,50 @@ def scan(request: Request, csrf: str = Form("")):
         flag = "scan_ok"
     else:
         flag = "scan_err"
-    return RedirectResponse(f"/flagged?{flag}=1", status_code=303)
+    # Land on Flagged Users. If the scan is still going (budget-chunked on the Service), pass its id so the page
+    # shows a live progress banner that drives the remaining chunks (POST /scans/{id}/tick) until done.
+    s = db.last_scan(t["id"]) or {}
+    qs = f"{flag}=1" + (f"&scan={s['id']}" if s.get("id") else "")
+    return RedirectResponse(f"/flagged?{qs}", status_code=303)
+
+
+def _scan_progress(s: dict) -> dict:
+    """JSON-safe live progress for the scanning banner, read from a scan_runs row."""
+    try:
+        cur = json.loads(s.get("cursor") or "{}")
+    except Exception:
+        cur = {}
+    try:
+        totals = json.loads(s["totals"]) if s.get("totals") else {}
+    except Exception:
+        totals = {}
+    status = s.get("status") or "running"
+    return {"id": s.get("id"), "status": status,
+            "done": status in ("done", "error"), "more": status == "paused",
+            "found": s.get("found_count") or 0, "unique": s.get("unique_emails") or 0,
+            "totals": totals if isinstance(totals, dict) else {},
+            "source": cur.get("src"), "page": cur.get("page"),
+            "sources_done": len(cur.get("done", []) or []), "error": s.get("error")}
+
+
+@app.post("/scans/{scan_id}/tick")
+def scan_tick(request: Request, scan_id: str, csrf: str = Form("")):
+    """Advance ONE budget-chunk of the tenant's in-flight scan and return live progress (JSON). The Flagged
+    Users page polls this in a sequential loop so a long scan runs in small request-bound steps with a live
+    progress bar — Cloud-Run-safe (no background thread). No-ops once the scan is done (never starts a new one)."""
+    user = auth.current_user(request)
+    if not user:
+        return JSONResponse({"error": "auth"}, status_code=401)
+    if not _check_csrf(request, csrf):
+        return JSONResponse({"error": "csrf"}, status_code=400)
+    t = _active_tenant(request)
+    s = db.last_scan(t["id"])
+    if not s or str(s.get("id")) != str(scan_id):
+        return JSONResponse({"stale": True})            # a newer scan exists -> client should reload
+    if (s.get("status") or "") in ("done", "error"):
+        return JSONResponse(_scan_progress(s))          # finished -> report only, do NOT start a new scan
+    service.run_scan(t, user["email"])                  # resumes the paused scan, runs exactly one budget chunk
+    return JSONResponse(_scan_progress(db.last_scan(t["id"]) or s))
 
 
 @app.get("/flagged", response_class=HTMLResponse)
@@ -232,7 +276,12 @@ def flagged(request: Request):
         row["scan_id"] = sc["id"] if sc else None
         row["scan_started"] = sc["started_at"] if sc else None
         history.setdefault(em, []).append(row)
+    # live progress: if a scan is still in flight (budget-chunked), surface a banner that the page polls
+    # (POST /scans/{id}/tick) to drive the remaining chunks + show found/pages live.
+    live = db.last_scan(t["id"])
+    live_scan = _scan_progress(live) if live and (live.get("status") or "") in ("running", "paused") else None
     return _render("flagged.html", request, user, tenant=t, rows=rows, history=history,
+                   live_scan=live_scan,
                    enabled=json.loads(t["enabled_actions"]),
                    admin_subject=service._tenant_subject(t),   # MSSP: hide remediation for THIS org's admin
                    mode=guardrails.effective_mode(), dry_run=settings.auto_dry_run,

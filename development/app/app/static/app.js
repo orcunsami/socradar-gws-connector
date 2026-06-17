@@ -58,6 +58,32 @@
       });
       activate(tabs[0].dataset.tab);   // show only the first tab once JS is in control
     });
+
+    // 5) live scan progress. Flagged Users renders #scan-live while a budget-chunked scan is still running;
+    //    drive the remaining chunks by POSTing /scans/{id}/tick in a SEQUENTIAL loop (next chunk only after the
+    //    previous returns) and update the live counts. On done/stale, reload to show the final list. No bg thread.
+    var live = document.getElementById("scan-live");
+    if (live && live.dataset.scanLive) {
+      var sid = live.dataset.scanLive, tok = live.dataset.csrf || "";
+      var setTxt = function (id, v) { var el = document.getElementById(id); if (el != null && v != null) el.textContent = v; };
+      var tick = function () {
+        var body = new URLSearchParams(); body.set("csrf", tok);
+        fetch("/scans/" + encodeURIComponent(sid) + "/tick", {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: body.toString(), credentials: "same-origin"
+        }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+          .then(function (p) {
+            if (p.stale || p.done) { window.location.reload(); return; }
+            setTxt("scan-live-found", p.found);
+            setTxt("scan-live-sources", p.sources_done);
+            if (p.source) setTxt("scan-live-cur", p.source);
+            if (p.page) setTxt("scan-live-page", p.page);
+            setTimeout(tick, 800);
+          })
+          .catch(function () { setTimeout(tick, 3000); });   // transient error -> back off + retry
+      };
+      setTimeout(tick, 600);
+    }
   }
 
   // bfcache reset: if the page is restored from the back/forward cache, its frozen DOM may still show the
