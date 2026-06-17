@@ -48,27 +48,7 @@ existing admin either way.
 
 **Save the file** (Cmd/Ctrl+S) when done.
 
-## 3) Create the sign-in OAuth client (required for the admin UI)
-
-The admin UI uses "Sign in with Google", so it needs one OAuth client in **your** project. Without it the
-service container will not start. Create it once (about 1 minute):
-
-1. **Console → APIs & Services → OAuth consent screen** (new console: **Google Auth platform**). If it is not
-   set up yet, choose **User type: Internal** and save. Internal means only people in your own Workspace can use
-   it, and Google does not require app verification. (If you already configured it, skip to step 2.)
-2. **APIs & Services → Credentials → Create credentials → OAuth client ID** (new console: **Clients → Create
-   client**) → Application type **Web application** → name it (e.g. `gws-connector`).
-3. Under **Authorized redirect URIs** add: `http://localhost:8080/auth/callback`
-   (this is where Google returns you after sign-in, via the proxy in step 6).
-4. **Create**, then copy the **Client ID** and **Client secret** into `GOOGLE_CLIENT_ID` and
-   `GOOGLE_CLIENT_SECRET` in
-   <walkthrough-editor-open-file filePath="deploy/customer.env">deploy/customer.env</walkthrough-editor-open-file>,
-   and **save**.
-
-Just want a headless scan test instead (no UI, skip this step)? Set `DEPLOY_MODE=job` and
-`STORAGE_BACKEND=firestore` in `deploy/customer.env` — the Job scans and reports without a UI or a sign-in client.
-
-## 4) Deploy
+## 3) Deploy
 
 Now deploy. It validates your config and builds everything:
 
@@ -81,7 +61,7 @@ stores your feed key and the audit key in Secret Manager, and deploys a private 
 periodic-scan scheduler). When it finishes it prints the service account **Client ID** and the four OAuth
 **scopes** — you need both in the next step.
 
-## 5) Authorize domain-wide delegation (one manual step)
+## 4) Authorize domain-wide delegation (one manual step)
 
 Only a Workspace **super admin** can register a delegation (that is a Google requirement for the *registration
 action* — it does **not** mean the connector runs as a super admin). The connector itself is least-privilege: it
@@ -104,7 +84,7 @@ https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.google
 
 4. Click **Authorize**. Propagation is usually minutes (up to 24h), so wait 2–3 minutes before scanning.
 
-## 6) Open the panel and run a scan
+## 5) Open the panel and run a scan
 
 The service is private, so it needs a sign-in gate. The cleanest way that works from anywhere — including
 Cloud Shell — is **native IAP**: Google signs you in at the edge on the same `run.app` URL, with no proxy and
@@ -118,15 +98,15 @@ It enables IAP, then runs a **~60-second countdown** while IAP access propagates
 can briefly show `You don't have access` (a 403), so let the counter reach 0 (or press Ctrl+C to try sooner).
 It prints your service URL twice — once when IAP turns on, and again, cleanly, after the wait.
 **Open that `https://...run.app` URL directly in your browser** — IAP signs you in with Google, then go to
-**Dashboard → Run scan** and check **Flagged Users**. (With IAP on, the OAuth client from step 3 is no longer
-used for the UI; the app trusts the IAP-verified identity.)
+**Dashboard → Run scan** and check **Flagged Users**. (Sign-in is native IAP — the app trusts the
+IAP-verified identity, so there is no OAuth client to create.)
 
 **Why not the proxy + Web Preview?** Behind `gcloud run services proxy` the app sees the `run.app` host, so its
 OAuth callback can never match `localhost:8080`, and Cloud Shell's preview URL carries query params Google will
 not register — you would hit `redirect_uri_mismatch`. The proxy path (`bash open-panel.sh`) works **only on your
 OWN machine**, where `localhost:8080` really is your browser's localhost. In Cloud Shell, use IAP above.
 
-## 7) Clean up (return to zero cost)
+## 6) Clean up (return to zero cost)
 
 When you are done testing, remove every billable resource:
 

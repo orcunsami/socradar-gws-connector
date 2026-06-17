@@ -97,7 +97,9 @@ export PROJECT REGION="${REGION:-europe-west1}" ADMIN_SUBJECT DOMAIN CUSTOMER_ID
 # never start (opaque "failed to listen on PORT 8080"). Catch it here with clear guidance.
 case "${DEPLOY_MODE:-service}" in
   service|both)
-    if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
+    if [ "${USE_IAP:-true}" = "true" ]; then
+      echo "  Sign-in: native IAP (USE_IAP=true) — no OAuth client needed; run 'bash enable-iap.sh' after deploy."
+    elif [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
       printf '\n\033[0;31mThe admin-UI SERVICE needs a Google sign-in method, or its container will not start.\033[0m\n'
       echo "Do ONE of these, then run 'bash setup.sh' again:"
       echo "  A) Create a Web OAuth client (one time) and set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in deploy/customer.env:"

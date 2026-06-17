@@ -128,9 +128,11 @@ FEED_COMPANY_ID=
 # --------------------------------------------------------------------
 FEED_BASE=https://platform.socradar.com
 
-# REQUIRED for the admin UI (DEPLOY_MODE=service): the SERVICE will not start on Cloud Run without a
-# sign-in method. Create a Web OAuth client (Internal consent screen, redirect
-# http://localhost:8080/auth/callback) and paste id+secret here. Leave empty ONLY for DEPLOY_MODE=job.
+# Admin-UI sign-in. Default USE_IAP=true uses native Cloud Run IAP — NO OAuth client needed; you just run
+# 'bash enable-iap.sh' after deploy. Leave GOOGLE_CLIENT_ID/SECRET empty. (Set USE_IAP=false ONLY if you want
+# the local-machine proxy path open-panel.sh, which uses the app's own Google OAuth — then create a Web OAuth
+# client with redirect http://localhost:8080/auth/callback and paste id+secret below.)
+USE_IAP=true
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 
@@ -148,10 +150,9 @@ cat <<EOF
   1. Open deploy/customer.env and paste your SOCRadar FEED_API_KEY + FEED_COMPANY_ID. Save.
      ADMIN_SUBJECT is set to you ($ACCT) for a quick test; switch it to a dedicated
      least-privilege admin for production. It must be a real, existing admin either way.
-  2. The admin UI (DEPLOY_MODE=service) needs a Google sign-in client: set GOOGLE_CLIENT_ID +
-     GOOGLE_CLIENT_SECRET (see the tutorial step), OR for a headless scan test set DEPLOY_MODE=job
-     and STORAGE_BACKEND=firestore. The SERVICE will not start without a sign-in method.
-  3. Run:  bash setup.sh    to validate and deploy.
+  2. Sign-in is native IAP by default (USE_IAP=true) — no OAuth client to create. Just run setup.sh,
+     then enable-iap.sh. (Leave GOOGLE_CLIENT_ID/SECRET empty.)
+  3. Run:  bash setup.sh    to validate and deploy, then  bash enable-iap.sh  to turn on IAP.
 EOF
 
 # In Cloud Shell, open the file in the editor for the customer.

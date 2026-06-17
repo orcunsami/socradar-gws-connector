@@ -124,6 +124,17 @@ if [ "$STORAGE_BACKEND" = "sqlite" ]; then
   echo "    NOTE: STORAGE_BACKEND=sqlite -> pinning --max-instances=1 (single-writer). Set STORAGE_BACKEND=firestore to scale out durably."
 fi
 
+# IAP-native deploy (DEFAULT): boot the app already in IAP mode so it needs NO Google-OAuth client to start —
+# the UI sign-in is native IAP, enabled next via enable-iap.sh. IAP_AUDIENCE binds the assertion to THIS
+# service and is deterministic, so we set it at deploy time (setup-iap.sh computes the identical value).
+# Set USE_IAP=false only for the local-machine proxy path (open-panel.sh), which uses the app's own OAuth.
+USE_IAP="${USE_IAP:-true}"
+IAP_ENV=""
+if [ "$USE_IAP" = "true" ]; then
+  PNUM="$($GC projects describe "$PROJECT" --format='value(projectNumber)')"
+  IAP_ENV="##IAP_MODE=true##IAP_AUDIENCE=/projects/${PNUM}/locations/${REGION}/services/${SERVICE}"
+fi
+
 # Env vars use gcloud's custom-delimiter form `^##^k=v##k=v`: REMEDIATION_ADMINS / APPROVAL_ACTIONS /
 # AUTO_ENABLED_ACTIONS are COMMA-separated values, and the default comma delimiter would split them into
 # bogus extra keys (a multi-admin REMEDIATION_ADMINS hard-failed the deploy). `##` never appears in an
@@ -140,14 +151,17 @@ fi
   --no-allow-unauthenticated \
   $MAX_INSTANCES_FLAG \
   --set-secrets="FEED_API_KEY=socradar-feed-key:latest,AUDIT_HMAC_KEY=audit-hmac-key:latest" \
-  --set-env-vars="^##^APP_ENV=prod##SERVICE_ACCOUNT=$SA##ADMIN_SUBJECT=$ADMIN_SUBJECT##REMEDIATION_ADMINS=${REMEDIATION_ADMINS:-$ADMIN_SUBJECT}##REQUIRE_APPROVAL=${REQUIRE_APPROVAL:-true}##APPROVAL_ACTIONS=${APPROVAL_ACTIONS:-suspend,reset_password,disable_2sv}##REMEDIATION_MODE=${REMEDIATION_MODE:-manual}##AUTO_ENABLED_ACTIONS=${AUTO_ENABLED_ACTIONS:-}##AUTO_DRY_RUN=${AUTO_DRY_RUN:-true}##AUTO_RATE_LIMIT_PER_HOUR=${AUTO_RATE_LIMIT_PER_HOUR:-20}##ALLOWED_DOMAIN=$DOMAIN##DEFAULT_DOMAIN=$DOMAIN##DEFAULT_CUSTOMER_ID=$CUSTOMER_ID##FEED_BASE=$FEED_BASE##FEED_COMPANY_ID=$FEED_COMPANY_ID##FEED_LOOKBACK_DAYS=${FEED_LOOKBACK_DAYS:-0}##FEED_START_DATE=${FEED_START_DATE:-2026-06-01}##GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}##GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}##OAUTH_REDIRECT_BASE=${OAUTH_REDIRECT_BASE:-http://localhost:8080}##SECRET_KEY=$SECRET_KEY##STORAGE_BACKEND=$STORAGE_BACKEND##PROJECT_ID=$PROJECT##ANALYTICS_BIGQUERY=$ANALYTICS_BIGQUERY##BIGQUERY_LOCATION=$REGION##CLOSE_SOCRADAR_ALARM=${CLOSE_SOCRADAR_ALARM:-false}##SCAN_TRIGGER_TOKEN=$SCAN_TOKEN##DB_PATH=/tmp/app.sqlite3" \
+  --set-env-vars="^##^APP_ENV=prod##SERVICE_ACCOUNT=$SA##ADMIN_SUBJECT=$ADMIN_SUBJECT##REMEDIATION_ADMINS=${REMEDIATION_ADMINS:-$ADMIN_SUBJECT}##REQUIRE_APPROVAL=${REQUIRE_APPROVAL:-true}##APPROVAL_ACTIONS=${APPROVAL_ACTIONS:-suspend,reset_password,disable_2sv}##REMEDIATION_MODE=${REMEDIATION_MODE:-manual}##AUTO_ENABLED_ACTIONS=${AUTO_ENABLED_ACTIONS:-}##AUTO_DRY_RUN=${AUTO_DRY_RUN:-true}##AUTO_RATE_LIMIT_PER_HOUR=${AUTO_RATE_LIMIT_PER_HOUR:-20}##ALLOWED_DOMAIN=$DOMAIN##DEFAULT_DOMAIN=$DOMAIN##DEFAULT_CUSTOMER_ID=$CUSTOMER_ID##FEED_BASE=$FEED_BASE##FEED_COMPANY_ID=$FEED_COMPANY_ID##FEED_LOOKBACK_DAYS=${FEED_LOOKBACK_DAYS:-0}##FEED_START_DATE=${FEED_START_DATE:-2026-06-01}##GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}##GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}##OAUTH_REDIRECT_BASE=${OAUTH_REDIRECT_BASE:-http://localhost:8080}##SECRET_KEY=$SECRET_KEY##STORAGE_BACKEND=$STORAGE_BACKEND##PROJECT_ID=$PROJECT##ANALYTICS_BIGQUERY=$ANALYTICS_BIGQUERY##BIGQUERY_LOCATION=$REGION##CLOSE_SOCRADAR_ALARM=${CLOSE_SOCRADAR_ALARM:-false}##SCAN_TRIGGER_TOKEN=$SCAN_TOKEN##DB_PATH=/tmp/app.sqlite3${IAP_ENV}" \
   --project="$PROJECT" )
 
-# SIGN-IN (P0): the admin UI uses Google OAuth. Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (a Web OAuth
-# client whose authorized redirect URI is the service URL + /auth/callback) — WITHOUT them the service
-# fail-closes at startup (no sign-in method). Pass them as env to this script.
-if [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
-  echo "    ⚠ GOOGLE_CLIENT_ID/SECRET not set — create a Web OAuth client + redeploy, or the UI cannot be entered."
+# SIGN-IN: by default (USE_IAP=true) the admin UI sign-in is native IAP, so NO Google-OAuth client is needed —
+# the app boots in IAP mode and you run enable-iap.sh next to put the IAP gate in front of it. With USE_IAP=false
+# the app uses its own Google OAuth instead (set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, a Web OAuth client whose
+# redirect URI is the service URL + /auth/callback) — without them, in that mode, the service fail-closes at startup.
+if [ "$USE_IAP" = "true" ]; then
+  echo "    Sign-in: native IAP (no OAuth client needed). NEXT STEP: run  bash enable-iap.sh  to enable the IAP gate."
+elif [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
+  echo "    ⚠ USE_IAP=false and GOOGLE_CLIENT_ID/SECRET not set — create a Web OAuth client + redeploy, or the UI cannot be entered."
 fi
 
 # AUTOMATED SCANNING (Entra parity): create a Cloud Scheduler job that hits /tasks/scan periodically.
