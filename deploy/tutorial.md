@@ -114,9 +114,12 @@ no redirect step. Turn it on with one command (it reads your project and grants 
 bash enable-iap.sh
 ```
 
-It prints your service URL. **Open that `https://...run.app` URL directly in your browser** — IAP signs you in
-with Google, then go to **Dashboard → Run scan** and check **Flagged Users**. (With IAP on, the OAuth client
-from step 3 is no longer used for the UI; the app trusts the IAP-verified identity.)
+It enables IAP, then runs a **~60-second countdown** while IAP access propagates. Opening before it finishes
+can briefly show `You don't have access` (a 403), so let the counter reach 0 (or press Ctrl+C to try sooner).
+It prints your service URL twice — once when IAP turns on, and again, cleanly, after the wait.
+**Open that `https://...run.app` URL directly in your browser** — IAP signs you in with Google, then go to
+**Dashboard → Run scan** and check **Flagged Users**. (With IAP on, the OAuth client from step 3 is no longer
+used for the UI; the app trusts the IAP-verified identity.)
 
 **Why not the proxy + Web Preview?** Behind `gcloud run services proxy` the app sees the `run.app` host, so its
 OAuth callback can never match `localhost:8080`, and Cloud Shell's preview URL carries query params Google will

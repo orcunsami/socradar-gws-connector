@@ -54,8 +54,10 @@ async def _security_headers(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def _generic_error(request: Request, exc: Exception):
-    """Never leak a stack trace / internal detail to the client (could carry secrets/PII)."""
-    log.error("unhandled error on %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    """Never leak a stack trace / internal detail to the client (could carry secrets/PII).
+    The trace goes to the server log only (Cloud Run logs) — exc_info so we can actually diagnose."""
+    log.error("unhandled error on %s %s: %s", request.method, request.url.path,
+              type(exc).__name__, exc_info=True)
     return JSONResponse({"error": "internal error"}, status_code=500)
 
 
@@ -110,13 +112,20 @@ def _check_csrf(request: Request, sent: str) -> bool:
 
 
 def _active_tenant(request: Request):
-    """The tenant the admin is currently operating on (session-selected; defaults to first)."""
+    """The tenant the admin is currently operating on (session-selected; defaults to first).
+    Never returns None: every page does t["id"], so if the tenants table was emptied (manual
+    delete / corruption) we re-assert the startup invariant (idempotent re-bootstrap) rather than
+    let 14 routes 500 on a None tenant."""
     tid = request.session.get("tenant_id")
     if tid:
         t = db.get_tenant(tid)
         if t:
             return t
-    return db.first_tenant()
+    t = db.first_tenant()
+    if t is None:
+        db.ensure_default_tenant()
+        t = db.first_tenant()
+    return t
 
 
 def _ctx(request: Request, user: dict, **extra) -> dict:
@@ -450,15 +459,25 @@ def scans_page(request: Request):
         return RedirectResponse("/login", status_code=303)
     t = _active_tenant(request)
     scans = db.recent_scans(t["id"], 50)   # finished scans, newest first
+    # remediation timestamps (guarded: an audit row with a null/odd action or ts must not 500 the page)
     rem_ts = [a["ts"] for a in db.list_audit(t["id"], 1000)
-              if a["action"].startswith("remediate:") and a["result"] == "ok"]
+              if a.get("ts") is not None and (a.get("action") or "").startswith("remediate:")
+              and a.get("result") == "ok"]
     enriched = []
     for i, s in enumerate(scans):
-        lo = s["started_at"]
-        hi = scans[i - 1]["started_at"] if i > 0 else float("inf")   # window up to the next-newer scan
-        enriched.append({**s,
-                         "totals_map": json.loads(s["totals"]) if s.get("totals") else {},
-                         "remediations": sum(1 for ts in rem_ts if lo <= ts < hi)})
+        # never let one malformed scan row (bad totals JSON, null started_at, ...) take down the whole page.
+        try:
+            lo = s.get("started_at") or 0
+            hi = scans[i - 1].get("started_at") if i > 0 else None   # window up to the next-newer scan
+            hi = hi if hi is not None else float("inf")
+            tm = json.loads(s["totals"]) if s.get("totals") else {}
+            if not isinstance(tm, dict):
+                tm = {}
+            rem = sum(1 for ts in rem_ts if lo <= ts < hi)
+        except Exception:
+            log.warning("scans: skipping enrichment for scan %s", s.get("id"), exc_info=True)
+            tm, rem = {}, 0
+        enriched.append({**s, "totals_map": tm, "remediations": rem})
     return _render("scans.html", request, user, tenant=t, scans=enriched)
 
 
@@ -475,14 +494,24 @@ def scan_detail_page(request: Request, scan_id: str):
     if idx is None:
         return RedirectResponse("/scans?err=notfound", status_code=303)
     s = scans[idx]
-    lo = s["started_at"]
-    hi = scans[idx - 1]["started_at"] if idx > 0 else float("inf")   # window up to the next-newer scan
-    in_window = [a for a in db.list_audit(t["id"], 1000) if lo <= a["ts"] < hi]
-    meta_rows = [a for a in in_window if a["action"] in ("scan", "feed_truncated", "anomaly_detected")]
+    lo = s.get("started_at") or 0
+    hi = scans[idx - 1].get("started_at") if idx > 0 else None   # window up to the next-newer scan
+    hi = hi if hi is not None else float("inf")
+    in_window = [a for a in db.list_audit(t["id"], 1000)
+                 if a.get("ts") is not None and lo <= a["ts"] < hi]
+    meta_rows = [a for a in in_window if (a.get("action") or "") in ("scan", "feed_truncated", "anomaly_detected")]
     action_rows = [a for a in in_window
-                   if a["action"].startswith(("remediate:", "paired:", "verify:", "auto:", "approval"))]
-    scan = {**s, "totals_map": json.loads(s["totals"]) if s.get("totals") else {},
-            "duration": (s["finished_at"] - s["started_at"]) if s.get("finished_at") else None}
+                   if (a.get("action") or "").startswith(("remediate:", "paired:", "verify:", "auto:", "approval"))]
+    try:
+        tm = json.loads(s["totals"]) if s.get("totals") else {}
+        if not isinstance(tm, dict):
+            tm = {}
+    except Exception:
+        tm = {}
+    dur = None
+    if s.get("finished_at") is not None and s.get("started_at") is not None:
+        dur = s["finished_at"] - s["started_at"]
+    scan = {**s, "totals_map": tm, "duration": dur}
     return _render("scan_detail.html", request, user, tenant=t, scan=scan,
                    meta_rows=meta_rows, action_rows=action_rows)
 

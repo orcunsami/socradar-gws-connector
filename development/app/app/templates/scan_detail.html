@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Scan · {{ scan.started_at|dt }}</h1>
+  <a class="btn ghost" href="/scans">← All scans</a>
+</div>
+
+<div class="panel">
+  <h2>Result</h2>
+  <table class="kv">
+    <tr><th>Started</th><td>{{ scan.started_at|dt }}</td></tr>
+    <tr><th>Finished</th><td>{{ scan.finished_at|dt if scan.finished_at else '—' }}{% if scan.duration is not none %} <span class="muted small">({{ scan.duration|round(1) }}s)</span>{% endif %}</td></tr>
+    <tr><th>Feed totals</th><td>{% for k, v in scan.totals_map.items() %}<span class="badge {{ k }}">{{ k }} {{ v }}</span>{% endfor %}{% if not scan.totals_map %}—{% endif %}</td></tr>
+    <tr><th>Unique leaked emails</th><td>{{ scan.unique_emails }}</td></tr>
+    <tr><th>In-scope &amp; found in directory</th><td><b>{{ scan.found_count }}</b> → see <a href="/flagged">Flagged Users</a></td></tr>
+    <tr><th>Result</th><td>{% if scan.error %}<span class="pill err">error</span> <span class="err-txt">{{ scan.error }}</span>{% else %}<span class="pill ok">ok</span>{% endif %}</td></tr>
+  </table>
+</div>
+
+{% if meta_rows %}
+<div class="panel">
+  <h2>What the scan saw</h2>
+  <table class="grid">
+    <thead><tr><th>Time</th><th>Event</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for a in meta_rows %}
+      <tr>
+        <td class="muted small">{{ a.ts|dt }}</td>
+        <td><span class="badge">{{ a.action }}</span></td>
+        <td>{% if a.result == 'ok' %}<span class="pill ok">ok</span>{% elif a.result in ('warning','blocked') %}<span class="pill warn">{{ a.result }}</span>{% else %}<span class="pill err">{{ a.result }}</span>{% endif %}</td>
+        <td class="muted small">{{ a.detail or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Detail decoded: <b>totals</b>=records the feed returned · <b>processed</b>=actually read ·
+    <b>in_scope</b>=inside your verified domains · <b>found</b>=exist in your directory (these became Flagged Users).</p>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Actions taken in this scan's window</h2>
+  {% if action_rows %}
+  <table class="grid">
+    <thead><tr><th>Time</th><th>Target</th><th>Action</th><th>Result</th><th>By</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for a in action_rows %}
+      <tr>
+        <td class="muted small">{{ a.ts|dt }}</td>
+        <td class="mono small">{{ a.target_email or '—' }}</td>
+        <td><code class="hist-act">{{ a.action }}</code></td>
+        <td>{% if a.result == 'ok' %}<span class="pill ok">ok</span>{% elif a.result in ('blocked','pending','dryrun','skipped','partial') %}<span class="pill warn">{{ a.result }}</span>{% else %}<span class="pill err">{{ a.result }}</span>{% endif %}</td>
+        <td class="mono small">{{ a.actor }}</td>
+        <td class="muted small">{{ a.detail or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No remediation actions were taken between this scan and the next one.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -50,24 +50,47 @@ for m in "${MEMBERS[@]}" "serviceAccount:${RUNTIME_SA}"; do
 done
 
 URL="$($GC run services describe "$SERVICE" --region="$REGION" --project="$PROJECT" --format='value(status.url)' 2>/dev/null || echo '(describe failed)')"
-cat <<EOF
+BAR="========================================================"
 
-============================================================================
-  IAP IS ON. Open the admin UI directly in your browser (IAP signs you in):
-      $URL
-  No proxy, no Web Preview, no redirect_uri — IAP authenticates at the edge and
-  the app verifies the signed assertion + your domain ($SERVICE uses ALLOWED_DOMAIN).
-============================================================================
+# ---- clean banner #1: IAP on, here is your link ----------------------------
+echo
+echo "$BAR"
+echo
+echo "     IAP IS ON.  Your admin panel (IAP signs you in at the edge):"
+echo
+echo "         $URL"
+echo
+echo "$BAR"
+echo
 
-  Security model: the admin UI is gated by IAP — the app cryptographically VERIFIES the IAP assertion
-  (app/iap.py: ES256 + iss + this service's aud + your domain) and serves NOTHING without a valid one, so a
-  direct (non-IAP) caller cannot enter the UI. The runtime SA still holds run.invoker (it is the scheduler's
-  identity), so a parallel non-IAP ingress path exists for it; that path can only reach /tasks/scan, which is
-  separately gated by SCAN_TRIGGER_TOKEN. For a single locked ingress, migrate the scheduler to call through
-  IAP (OIDC aud = the IAP OAuth client) and then revoke run.invoker from the runtime SA.
+# ---- recommended wait: IAP IAM grants take ~1 min to propagate -------------
+# Opening before propagation finishes shows "You don't have access" (a 403). Wait it out with a
+# visible countdown so the very first open just works. You CAN open now (Ctrl+C to skip the wait),
+# but the first try may 403 until this counter reaches 0.
+echo "  IAP access is propagating. Recommended wait so the first open works (no 403):"
+echo
+SKIP=""
+trap 'SKIP=1' INT
+i=60
+while [ "$i" -gt 0 ] && [ -z "$SKIP" ]; do
+  printf "\r        waiting %2ds   (Ctrl+C to open now)   " "$i"
+  sleep 1 || SKIP=1
+  i=$((i-1))
+done
+trap - INT
+printf "\r                                                   \r"
 
-  Scheduler note: the periodic-scan jobs call with an OIDC token whose audience is the run.app URL, which IAP
-  rejects. Until reconfigured, trigger scans from the UI (Dashboard -> Run scan) or via /tasks/scan with the
-  SCAN_TRIGGER_TOKEN. Disable IAP again:
-      gcloud run services update $SERVICE --region=$REGION --no-iap --update-env-vars IAP_MODE=false
-EOF
+# ---- clean banner #2: ready, open now --------------------------------------
+echo
+echo "$BAR"
+echo
+echo "     READY.  Open this in your browser now:"
+echo
+echo "         $URL"
+echo
+echo "$BAR"
+echo
+echo "  Next:  open the link  ->  Dashboard  ->  Run scan  ->  check Flagged Users."
+echo "  Security model + scheduler notes:  docs/deploy-to-gcp-guide.md  (Security section)."
+echo "  Turn IAP off later:  gcloud run services update $SERVICE --region=$REGION --no-iap --update-env-vars IAP_MODE=false"
+echo

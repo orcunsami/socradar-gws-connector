@@ -19,6 +19,8 @@ a:hover{text-decoration:underline}
 .brand{font-weight:700;font-size:15px;display:flex;flex-direction:column;line-height:1.1}
 .brand span{font-weight:400;font-size:11px;color:var(--muted)}
 .brand.big{font-size:22px;align-items:center}.brand.big span{font-size:13px;margin-top:4px}
+.brand-logo{height:22px;width:auto;display:block;margin-bottom:3px}
+.brand.big .brand-logo{height:42px;margin-bottom:6px}
 .topbar nav{display:flex;gap:18px;margin-left:8px}
 .topbar nav a{color:var(--text);font-weight:500}
 .topbar .user{margin-left:16px;display:flex;align-items:center;gap:12px}

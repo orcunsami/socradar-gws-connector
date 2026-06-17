@@ -272,6 +272,26 @@ gcloud secrets list --project=your-gcp-project       # empty
 - Per-customer **single-tenant**: each customer runs their own instance (the multi-tenant code works
   but here it serves one tenant = themselves).
 
+## Security model — native IAP (recommended for the admin UI)
+`bash enable-iap.sh` puts **native Cloud Run IAP** in front of the private service (same `run.app` URL, no
+load balancer, no cost). IAP authenticates the admin with Google at the edge and injects a signed
+`X-Goog-IAP-JWT-Assertion`; the app **cryptographically verifies** it (`app/iap.py`: ES256 + issuer +
+this service's audience + your `ALLOWED_DOMAIN`) and serves nothing without a valid one — a direct,
+non-IAP caller cannot enter the UI. With IAP on, the app drops its own Google-OAuth sign-in (no OAuth
+client needed for the UI).
+
+- **Propagation wait.** IAP IAM grants take ~1 minute to take effect; opening the URL too early returns
+  `You don't have access` (a 403). `enable-iap.sh` ends with a ~60s countdown for exactly this — let it
+  finish, then open the printed URL.
+- **Residual ingress (honest note).** The runtime SA still holds `run.invoker` (it is the scheduler's
+  identity), so a parallel non-IAP path exists for it; that path can only reach `/tasks/scan`, which is
+  separately gated by `SCAN_TRIGGER_TOKEN`. For a single locked ingress, migrate the scheduler to call
+  through IAP (OIDC `aud` = the IAP OAuth client) and then revoke `run.invoker` from the runtime SA.
+- **Scheduler note.** Periodic-scan jobs call with an OIDC token whose audience is the `run.app` URL,
+  which IAP rejects. Until reconfigured, trigger scans from the UI (Dashboard → Run scan) or via
+  `/tasks/scan` with the `SCAN_TRIGGER_TOKEN`.
+- **Turn IAP off:** `gcloud run services update gws-connector --region=REGION --no-iap --update-env-vars IAP_MODE=false`.
+
 ## Verified gotchas (baked into the script)
 - `--service-account` = what the service RUNS AS; `--no-allow-unauthenticated` = who can CALL it —
   orthogonal. The connector uses a dedicated runtime SA + private ingress.

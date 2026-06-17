@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Scans</h1>
+  <form method="post" action="/scan" data-scan><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit" data-busy-text="Scanning…">Run scan now</button></form>
+</div>
+
+<p class="muted small">Each scan reads the SOCRadar feed for this tenant, keeps the emails inside your verified
+  domains, and checks every one against your Workspace directory. <b>Found in dir</b> users land in
+  <a href="/flagged">Flagged Users</a>; <b>Remediations</b> counts the successful actions taken between this
+  scan and the next one — so you can see at a glance which scans were acted on.</p>
+
+{% if scans %}
+<table class="grid">
+  <thead><tr><th>Started</th><th>Duration</th><th>Feed totals</th><th>Unique emails</th><th>Found in dir</th><th>Remediations</th><th>Result</th><th></th></tr></thead>
+  <tbody>
+  {% for s in scans %}
+    <tr>
+      <td class="muted small"><a href="/scans/{{ s.id }}">{{ s.started_at|dt }}</a></td>
+      <td class="muted small">{% if s.finished_at %}{{ (s.finished_at - s.started_at)|round(1) }}s{% else %}—{% endif %}</td>
+      <td>
+        {% for k, v in s.totals_map.items() %}<span class="badge {{ k }}">{{ k }} {{ v }}</span>{% endfor %}
+        {% if not s.totals_map %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td>{{ s.unique_emails }}</td>
+      <td><b>{{ s.found_count }}</b></td>
+      <td>{% if s.remediations %}<a href="/scans/{{ s.id }}"><span class="pill ok">{{ s.remediations }} action{{ 's' if s.remediations != 1 else '' }}</span></a>{% else %}<span class="muted small">none</span>{% endif %}</td>
+      <td>{% if s.error %}<span class="pill err" title="{{ s.error }}">error</span>{% else %}<span class="pill ok">ok</span>{% endif %}</td>
+      <td><a href="/scans/{{ s.id }}" class="small">details →</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="muted">No scans yet. Use the “Run scan now” button above.</p>{% endif %}
+{% endblock %}
