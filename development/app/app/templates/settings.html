@@ -42,6 +42,10 @@
       </select>
       <label>Custom start date <span class="muted small">(used only when the window is “Custom date”; keep it narrow)</span></label>
       <input type="text" name="feed_start_date" value="{{ tenant.feed_start_date }}" placeholder="YYYY-MM-DD">
+      <label class="check"><input type="checkbox" name="reset_backfill" value="1">
+        Re-scan the full window on the next scan
+        <span class="help-icon" tabindex="0" data-tip="Tick this to clear the incremental high-water mark so the NEXT scan re-reads the ENTIRE window from its start (not just new entries). Use it after widening the window to the SAME value it already had, or to re-check older feed entries. After that one full pass it resumes incremental automatically.">i</span>
+        {% if tenant.feed_high_water %}<span class="muted small">(last scanned up to {{ tenant.feed_high_water }})</span>{% else %}<span class="muted small">(no scan yet — next scan reads the full window anyway)</span>{% endif %}</label>
       <label>API key <span class="muted small">(leave blank to keep the current key)</span></label>
       <input type="password" name="feed_api_key" value="" placeholder="{{ '•••• currently set' if tenant.feed_api_key else 'not set' }}">
     </fieldset>

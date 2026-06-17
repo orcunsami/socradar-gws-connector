@@ -39,14 +39,17 @@ def _csrf():
     return m.group(1) if m else ""
 
 
-def _post_settings(lookback, start_date=None):
+def _post_settings(lookback, start_date=None, reset=False):
     t = db.get_tenant(tid)
-    return cl.post("/settings", data={
+    data = {
         "verified_domains": "example.com",
         "feed_base": t["feed_base"], "feed_company_id": t["feed_company_id"],
         "feed_start_date": start_date if start_date is not None else t["feed_start_date"],
         "feed_lookback_days": str(lookback), "quarantine_group": "", "csrf": _csrf(),
-    }, follow_redirects=False)
+    }
+    if reset:
+        data["reset_backfill"] = "1"
+    return cl.post("/settings", data=data, follow_redirects=False)
 
 
 P = F = 0
@@ -89,6 +92,14 @@ _post_settings(0, start_date="2025-01-01")
 t = db.get_tenant(tid)
 chk("custom-date change also resets high-water", (t["feed_high_water"] or "") == "")
 chk("effective start follows custom date when lookback=0", service._effective_start_date(t) == "2025-01-01")
+
+# 6) the explicit "re-scan the full window" checkbox resets high-water even when the window is UNCHANGED
+#    (this is the operator's escape hatch when the lookback is already the desired value but high-water pins it)
+db.update_tenant(tid, feed_high_water=today.isoformat())
+chk("precondition: high-water set again", (db.get_tenant(tid)["feed_high_water"] or "") == today.isoformat())
+_post_settings(0, start_date="2025-01-01", reset=True)   # SAME window as #5, but tick the reset box
+chk("reset_backfill checkbox clears high-water on unchanged window",
+    (db.get_tenant(tid)["feed_high_water"] or "") == "")
 
 print(f"\nRESULT: {'PASS' if F == 0 else 'FAIL'} — lookback/high-water reset on window change ({P} ok, {F} fail)")
 sys.exit(0 if F == 0 else 1)

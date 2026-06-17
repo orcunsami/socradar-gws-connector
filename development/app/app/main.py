@@ -391,7 +391,7 @@ def settings_page(request: Request):
 def settings_save(request: Request, verified_domains: str = Form(""), feed_base: str = Form(""),
                   feed_company_id: str = Form(""), feed_api_key: str = Form(""),
                   feed_start_date: str = Form(""), feed_lookback_days: int = Form(0),
-                  quarantine_group: str = Form(""),
+                  reset_backfill: str = Form(""), quarantine_group: str = Form(""),
                   admin_subject: str = Form(""), service_account: str = Form(""),
                   enabled_actions: list[str] = Form(default=[]), csrf: str = Form("")):
     user = auth.current_user(request)
@@ -440,8 +440,11 @@ def settings_save(request: Request, verified_domains: str = Form(""), feed_base:
     # new window. Without this, once a tenant has scanned once _effective_start_date() returns at the
     # high-water branch, and a new "Last 1 year" / custom start date silently does nothing (every scan keeps
     # starting from the last run). Resetting forces one re-backfill from the new start, then it resumes incremental.
+    # Reset the incremental high-water (force a full re-read of the window on the next scan) when EITHER the
+    # window config changed OR the operator explicitly ticked "re-scan the full window" (covers the case where
+    # the lookback is already the desired value but the high-water is still pinned to an earlier short window).
     cur_lookback = (t["feed_lookback_days"] if "feed_lookback_days" in t.keys() else 0) or 0
-    if new_lookback != cur_lookback or new_start != t["feed_start_date"]:
+    if reset_backfill or new_lookback != cur_lookback or new_start != t["feed_start_date"]:
         fields["feed_high_water"] = ""
     db.update_tenant(t["id"], **fields)
     db.audit(t["id"], user["email"], "settings", "ok",
