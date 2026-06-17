@@ -92,6 +92,7 @@ def _tenant_doc(snap):
     d.setdefault("verified_domains", "[]")
     d.setdefault("feed_lookback_days", 0)
     d.setdefault("feed_high_water", "")
+    d.setdefault("scan_interval", "off")
     return d
 
 

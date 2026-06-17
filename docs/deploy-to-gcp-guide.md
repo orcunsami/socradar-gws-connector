@@ -173,7 +173,9 @@ DWD-authorized in the org — otherwise signing fails with a clean error in that
 The deploy script does this for you. It grants the runtime SA `roles/run.invoker` on the private service
 and creates two Cloud Scheduler jobs, both OIDC-authenticated and carrying the `X-Scan-Token` header:
 
-- `gws-scan` calls `POST /tasks/scan` every 6 hours (override with `SCAN_SCHEDULE`).
+- `gws-scan` calls `POST /tasks/scan` every 30 minutes (a tick; override with `SCAN_SCHEDULE`). Each tenant
+  is scanned only when **its** per-tenant **Auto-scan** interval (Settings → Feed → Auto-scan: off / 30m / 1h /
+  6h / daily) has elapsed since its last finished scan — so the cadence is self-service in the UI, not the cron.
 - `gws-verify-audit` calls `POST /tasks/verify-audit` daily at 03:00 (re-checks the audit hash chain).
 
 To change the scan cadence, set `SCAN_SCHEDULE` before deploying, for example:
@@ -252,9 +254,11 @@ gcloud secrets list --project=your-gcp-project       # empty
   --update-secrets=FERNET_KEY=app-fernet-key:1`). Then per-tenant feed keys are stored encrypted; unset =
   plaintext (backward-compat). ⚠️ Generate the key ONCE and never lose it — a changed key makes stored
   ciphertext undecryptable.
-- **Automated scanning is available** via the headless `POST /tasks/scan` endpoint + Cloud Scheduler
-  (see below). Manual "Run scan" in the UI also works. With the default Firestore backend, scan history +
-  flagged users + the audit trail **persist** across restarts/scale-to-zero.
+- **Automated scanning is self-service in the UI.** Set a per-tenant cadence in **Settings → Feed → Auto-scan**
+  (off / every 30 min / hourly / 6-hourly / daily). A Cloud Scheduler tick (every 30 min) calls the headless
+  `POST /tasks/scan`, which scans each tenant only when its interval has elapsed. `off` = manual only; the
+  **Run scan** button always works. With the default Firestore backend, scan history + flagged users + the
+  audit trail **persist** across restarts/scale-to-zero.
 - **Admin UI access** requires `gcloud run services proxy` or IAP (service is private by design).
   A public login page (`--allow-unauthenticated` + the app's Google OAuth) is possible but needs an
   OAuth client + Internal consent screen configured in the customer project.
@@ -276,9 +280,13 @@ client needed for the UI).
   identity), so a parallel non-IAP path exists for it; that path can only reach `/tasks/scan`, which is
   separately gated by `SCAN_TRIGGER_TOKEN`. For a single locked ingress, migrate the scheduler to call
   through IAP (OIDC `aud` = the IAP OAuth client) and then revoke `run.invoker` from the runtime SA.
-- **Scheduler note.** Periodic-scan jobs call with an OIDC token whose audience is the `run.app` URL,
-  which IAP rejects. Until reconfigured, trigger scans from the UI (Dashboard → Run scan) or via
-  `/tasks/scan` with the `SCAN_TRIGGER_TOKEN`.
+- **Scheduler under IAP (verify live).** The `gws-scan` job authenticates as the runtime SA with an OIDC
+  token (audience = the `run.app` URL) and reaches `/tasks/scan` over the SA's `run.invoker` private-ingress
+  path — which is SEPARATE from the IAP edge gate, so scheduled scans are expected to keep working with IAP on
+  (IAP only fronts the interactive UI). This has NOT been live-verified end-to-end yet — after enabling IAP,
+  confirm a scheduled run with `gcloud run services logs read gws-connector ... | grep "/tasks/scan"`. If they
+  do return 403, either keep using the **Run scan** button + `/tasks/scan` with `SCAN_TRIGGER_TOKEN`, or
+  reconfigure the job to authenticate through IAP (and then revoke `run.invoker` for a single locked ingress).
 - **Turn IAP off:** `gcloud run services update gws-connector --region=REGION --no-iap --update-env-vars IAP_MODE=false`.
 
 ## Verified gotchas (baked into the script)

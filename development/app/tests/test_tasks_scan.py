@@ -30,7 +30,7 @@ checks = {
     "no header -> 403":        c.post("/tasks/scan").status_code == 403,
     "wrong header -> 403":     c.post("/tasks/scan", headers={"X-Scan-Token": "nope"}).status_code == 403,
 }
-r = c.post("/tasks/scan", headers={"X-Scan-Token": "s3cr3t"})
+r = c.post("/tasks/scan?force=1", headers={"X-Scan-Token": "s3cr3t"})   # force = scan ALL (bypass per-tenant due-check)
 body = r.json()
 # new shape: scans ALL tenants -> {ok, tenants:{id: result}} (headless must not depend on session)
 _tenant_results = list(body.get("tenants", {}).values())

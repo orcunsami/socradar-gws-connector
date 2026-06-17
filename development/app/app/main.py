@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
@@ -21,6 +22,9 @@ from . import auth, connector, db, guardrails, metrics, service
 from .config import assert_startup_safe, is_cloud_run, settings
 
 log = logging.getLogger("socradar.gws")
+
+# per-tenant Auto-scan interval -> seconds (the /tasks/scan due-check). 'off' = no auto-scan.
+_INTERVAL_SECS = {"30m": 1800, "1h": 3600, "6h": 21600, "daily": 86400}
 
 BASE = Path(__file__).parent
 app = FastAPI(title="SOCRadar Google Workspace Connector")
@@ -447,7 +451,8 @@ def settings_page(request: Request):
 def settings_save(request: Request, verified_domains: str = Form(""), feed_base: str = Form(""),
                   feed_company_id: str = Form(""), feed_api_key: str = Form(""),
                   feed_start_date: str = Form(""), feed_lookback_days: int = Form(0),
-                  reset_backfill: str = Form(""), quarantine_group: str = Form(""),
+                  reset_backfill: str = Form(""), scan_interval: str = Form("off"),
+                  quarantine_group: str = Form(""),
                   admin_subject: str = Form(""), service_account: str = Form(""),
                   enabled_actions: list[str] = Form(default=[]), csrf: str = Form("")):
     user = auth.current_user(request)
@@ -487,6 +492,8 @@ def settings_save(request: Request, verified_domains: str = Form(""), feed_base:
         "feed_start_date": new_start,
         # rolling-window preset (today - N). 0 = use the fixed feed_start_date. Validated against the offered set.
         "feed_lookback_days": new_lookback,
+        # auto-scan cadence (off|30m|1h|6h|daily) — the /tasks/scan due-check + the Cloud Scheduler tick honor it.
+        "scan_interval": scan_interval if scan_interval in ("off", "30m", "1h", "6h", "daily") else "off",
         "enabled_actions": json.dumps(valid_actions),
         "quarantine_group": qg,
         "admin_subject": asub,
@@ -654,10 +661,12 @@ def tenant_switch(request: Request, tenant_id: str = Form(...), csrf: str = Form
 def tasks_scan(request: Request):
     """Headless scan trigger for Cloud Scheduler (automated periodic scanning).
 
-    NOT app-login/CSRF gated — protected at the INFRASTRUCTURE layer: deploy the service with
-    --no-allow-unauthenticated and grant the scheduler's service account roles/run.invoker, so only
-    its OIDC-authenticated call reaches this route. Scans EVERY tenant (headless has no session, so it
-    must not depend on the session-selected tenant — it would otherwise only ever scan the first one).
+    Honors each tenant's per-tenant **Auto-scan** setting (Settings -> Feed -> Auto-scan): the Cloud
+    Scheduler ticks frequently and this endpoint scans a tenant ONLY when its `scan_interval` has elapsed
+    since that tenant's last finished scan. `?force=1` scans every tenant regardless (initial / manual run).
+    NOT app-login/CSRF gated — protected at the INFRASTRUCTURE layer (--no-allow-unauthenticated + the
+    scheduler SA's run.invoker) plus the X-Scan-Token header. Scans every DUE tenant (headless has no
+    session, so it must not depend on the session-selected tenant).
     """
     if settings.scan_trigger_token and not secrets.compare_digest(
             request.headers.get("x-scan-token", ""), settings.scan_trigger_token):
@@ -665,9 +674,22 @@ def tasks_scan(request: Request):
     tenants = db.list_tenants()
     if not tenants:
         return JSONResponse({"ok": False, "error": "no tenant configured"}, status_code=400)
+    force = request.query_params.get("force", "") in ("1", "true", "yes")
+    now = time.time()
     results = {}
     all_ok = True
     for t in tenants:
+        if not force:
+            iv = (t["scan_interval"] if "scan_interval" in t.keys() else "off") or "off"
+            secs = _INTERVAL_SECS.get(iv)
+            if secs is None:                         # 'off'/unknown -> auto-scan disabled for this tenant
+                results[str(t["id"])] = {"ok": True, "auto": "off"}
+                continue
+            last = db.recent_scans(t["id"], 1)       # most recent FINISHED scan (finished_at not null)
+            last_fin = last[0]["finished_at"] if last else None
+            if last_fin is not None and (now - last_fin) < secs:
+                results[str(t["id"])] = {"ok": True, "due": False}   # scanned recently -> not due yet
+                continue
         r = service.run_scan(t, "scheduler")
         results[str(t["id"])] = r
         all_ok = all_ok and r.get("ok", False)

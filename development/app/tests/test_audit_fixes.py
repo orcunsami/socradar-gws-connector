@@ -110,7 +110,7 @@ db.create_tenant("C0two", "T2", ["two.com"], "https://x", "2", "k", "2026-01-01"
 scanned = []
 service.run_scan = lambda tenant, actor: (scanned.append(tenant["id"]) or {"ok": True, "actor": actor})
 cl2 = TestClient(main.app)
-rr = cl2.post("/tasks/scan", headers={"x-scan-token": "tok"})
+rr = cl2.post("/tasks/scan?force=1", headers={"x-scan-token": "tok"})   # force = scan ALL (bypass due-check)
 c["/tasks/scan scans every tenant"] = rr.status_code == 200 and len(scanned) == len(db.list_tenants()) >= 2
 
 # ---------- E2E: feed -> filter -> lookup -> flag -> remediate -> close -> audit -> metrics ----------

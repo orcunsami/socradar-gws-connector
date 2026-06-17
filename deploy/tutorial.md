@@ -8,11 +8,12 @@ service. It runs keyless (no service-account key file). SOCRadar hosts nothing.
 Everything you run lives at the top of this project — three scripts, in order:
 
 1. **`bash create-env.sh`** — auto-writes your config (you add only the SOCRadar feed key).
-2. **`bash setup.sh`** — validates and deploys.
-3. **`bash open-panel.sh`** — opens the admin UI.
+2. **`bash setup.sh`** — validates and deploys (durable Firestore storage is set up automatically).
+3. **`bash enable-iap.sh`** — turns on sign-in (native IAP) and prints the admin URL.
 
-Between step 1 and step 2 you do two one-time Google setup tasks (a sign-in client, and after deploy a
-domain-wide-delegation authorization). The steps below walk you through all of it.
+After `setup.sh` you do one one-time Google task: a **domain-wide-delegation** authorization (the script
+prints exactly what to paste). Sign-in is **native IAP** — there is NO OAuth client to create. The steps
+below walk you through all of it.
 
 Click **Start** to begin.
 
@@ -101,6 +102,10 @@ It prints your service URL twice — once when IAP turns on, and again, cleanly,
 **Open that `https://...run.app` URL directly in your browser** — IAP signs you in with Google, then go to
 **Dashboard → Run scan** and check **Flagged Users**. (Sign-in is native IAP — the app trusts the
 IAP-verified identity, so there is no OAuth client to create.)
+
+To scan on a schedule instead of by hand, open **Settings → Feed → Auto-scan** and pick a cadence
+(every 30 min / hourly / 6-hourly / daily). The connector then scans itself automatically; `Off` keeps it
+manual-only.
 
 **Why not the proxy + Web Preview?** Behind `gcloud run services proxy` the app sees the `run.app` host, so its
 OAuth callback can never match `localhost:8080`, and Cloud Shell's preview URL carries query params Google will

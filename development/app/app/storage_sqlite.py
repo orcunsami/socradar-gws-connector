@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     service_account TEXT NOT NULL DEFAULT '',     -- MSSP: per-org DWD SA override; '' = use the shared global SA
     feed_lookback_days INTEGER NOT NULL DEFAULT 0, -- rolling feed window preset (today-N); 0 = use the fixed feed_start_date
     feed_high_water TEXT NOT NULL DEFAULT '',      -- incremental: next startDate (last fully-scanned discovery date); '' = backfill from scratch
+    scan_interval TEXT NOT NULL DEFAULT 'off',     -- auto-scan cadence: off|30m|1h|6h|daily (scheduler ticks; per-tenant due-check gates it)
     created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS flagged_users (
@@ -125,6 +126,8 @@ def init_schema():
             c.execute("ALTER TABLE tenants ADD COLUMN feed_lookback_days INTEGER NOT NULL DEFAULT 0")
         if "feed_high_water" not in cols:
             c.execute("ALTER TABLE tenants ADD COLUMN feed_high_water TEXT NOT NULL DEFAULT ''")
+        if "scan_interval" not in cols:
+            c.execute("ALTER TABLE tenants ADD COLUMN scan_interval TEXT NOT NULL DEFAULT 'off'")
         scols = [r["name"] for r in c.execute("PRAGMA table_info(scan_runs)").fetchall()]
         if "status" not in scols:
             # existing finished rows are 'done'; an unfinished legacy row stays NULL->treated as not-running

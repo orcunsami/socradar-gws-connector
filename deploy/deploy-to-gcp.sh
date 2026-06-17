@@ -176,7 +176,7 @@ elif [ -z "${GOOGLE_CLIENT_ID:-}" ]; then
 fi
 
 # AUTOMATED SCANNING (Entra parity): create a Cloud Scheduler job that hits /tasks/scan periodically.
-echo "==> [5b/6] Cloud Scheduler: periodic scan (${SCAN_SCHEDULE:-0 */6 * * *}) + daily audit-verify"
+echo "==> [5b/6] Cloud Scheduler: periodic scan (${SCAN_SCHEDULE:-*/30 * * * *}) + daily audit-verify"
 $GC services enable cloudscheduler.googleapis.com --project="$PROJECT" 2>/dev/null || true
 SVC_URL="$($GC run services describe "$SERVICE" --region="$REGION" --project="$PROJECT" --format='value(status.url)' 2>/dev/null)"
 if [ -n "$SVC_URL" ]; then
@@ -186,7 +186,7 @@ if [ -n "$SVC_URL" ]; then
     --member="serviceAccount:$SA" --role="roles/run.invoker" >/dev/null 2>&1 \
     && echo "    + run.invoker granted to $SA (scheduler can call the private service)" \
     || echo "    (could not grant run.invoker — scheduled scans will 403 until granted manually)"
-  for job in "gws-scan:/tasks/scan:${SCAN_SCHEDULE:-0 */6 * * *}" "gws-verify-audit:/tasks/verify-audit:0 3 * * *"; do
+  for job in "gws-scan:/tasks/scan:${SCAN_SCHEDULE:-*/30 * * * *}" "gws-verify-audit:/tasks/verify-audit:0 3 * * *"; do
     name="${job%%:*}"; rest="${job#*:}"; path="${rest%%:*}"; sched="${rest#*:}"
     $GC scheduler jobs delete "$name" --location="$REGION" --project="$PROJECT" --quiet 2>/dev/null || true
     $GC scheduler jobs create http "$name" --location="$REGION" --project="$PROJECT" \
@@ -205,6 +205,15 @@ fi
 echo "==> [6/6] Outputs"
 CLIENT_ID="$($GC iam service-accounts describe "$SA" --format='value(oauth2ClientId)' --project="$PROJECT")"
 URL="$($GC run services describe "$SERVICE" --region="$REGION" --format='value(status.url)' --project="$PROJECT" 2>/dev/null || echo '(describe failed)')"
+
+# how to open the UI depends on the sign-in mode chosen at deploy (default = native IAP)
+if [ "${USE_IAP:-true}" = "true" ]; then
+  OPEN_SCRIPT="enable-iap.sh"
+  OPEN_LINE="Turn on sign-in + open:  bash enable-iap.sh   (native IAP signs you in at the run.app URL — no proxy, no OAuth client)"
+else
+  OPEN_SCRIPT="open-panel.sh"
+  OPEN_LINE="Open the admin UI:  bash open-panel.sh   (local-machine proxy: gcloud run services proxy $SERVICE)"
+fi
 
 cat <<EOF
 
@@ -228,10 +237,7 @@ admin.google.com -> Security -> Access and data control -> API controls ->
   an existing admin, then redeploy.
 
 Service URL (PRIVATE — needs auth to open): $URL
-  Open the admin UI:  bash open-panel.sh   (reads project/region from customer.env; then in
-                      Cloud Shell click Web Preview -> "Preview on port 8080")
-  Manual equivalent:  gcloud run services proxy $SERVICE --region=$REGION --project=$PROJECT
-  (or put Identity-Aware Proxy in front for a real browser URL)
+  $OPEN_LINE
 
 Teardown:  bash deploy/cleanup.sh   (cost discipline — deletes service, secrets, build images, scheduler jobs;
            the runtime SA + DWD authorization are left in place — both zero-cost IAM objects)
@@ -247,5 +253,5 @@ cat <<EOF
     Client ID:  $CLIENT_ID
     OAuth scopes (paste as one comma-separated line):
     https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/admin.directory.group.member
-    Then open the admin UI:  bash open-panel.sh
+    Then: $OPEN_LINE
 EOF

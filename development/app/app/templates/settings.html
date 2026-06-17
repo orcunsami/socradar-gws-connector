@@ -43,6 +43,16 @@
         Re-scan the full window on the next scan
         <span class="help-icon" tabindex="0" data-tip="Tick this to clear the incremental high-water mark so the NEXT scan re-reads the ENTIRE window from its start (not just new entries). Use it after widening the window to the SAME value it already had, or to re-check older feed entries. After that one full pass it resumes incremental automatically.">i</span>
         {% if tenant.feed_high_water %}<span class="muted small">(last scanned up to {{ tenant.feed_high_water }})</span>{% else %}<span class="muted small">(no scan yet — next scan reads the full window anyway)</span>{% endif %}</label>
+      <label>Auto-scan
+        <span class="help-icon" tabindex="0" data-tip="How often the connector scans this tenant automatically (a Cloud Scheduler tick checks every 30 min and runs a scan only when this interval has elapsed). 'Off' = manual only (the Run scan button still works). After the first full scan, auto-scans are small incremental deltas.">i</span>
+        <span class="muted small">(scheduled scans)</span></label>
+      <select name="scan_interval">
+        <option value="off"   {% if not tenant.scan_interval or tenant.scan_interval == 'off' %}selected{% endif %}>Off (manual only)</option>
+        <option value="30m"   {% if tenant.scan_interval == '30m' %}selected{% endif %}>Every 30 minutes</option>
+        <option value="1h"    {% if tenant.scan_interval == '1h' %}selected{% endif %}>Every hour</option>
+        <option value="6h"    {% if tenant.scan_interval == '6h' %}selected{% endif %}>Every 6 hours</option>
+        <option value="daily" {% if tenant.scan_interval == 'daily' %}selected{% endif %}>Daily</option>
+      </select>
       <label>API key <span class="muted small">(leave blank to keep the current key)</span></label>
       <input type="password" name="feed_api_key" value="" placeholder="{{ '•••• currently set' if tenant.feed_api_key else 'not set' }}">
     </fieldset>

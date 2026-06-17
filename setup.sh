@@ -89,7 +89,7 @@ trap cleanup EXIT
 # ---------- 5) deploy (Service = admin UI + scheduler; Job = large-feed backfill host) ----------
 export PROJECT REGION="${REGION:-europe-west1}" ADMIN_SUBJECT DOMAIN CUSTOMER_ID="${CUSTOMER_ID:-my_customer}" \
        FEED_BASE="${FEED_BASE:-https://platform.socradar.com}" FEED_COMPANY_ID \
-       STORAGE_BACKEND="${STORAGE_BACKEND:-sqlite}" REMEDIATION_ADMINS="${REMEDIATION_ADMINS:-$ADMIN_SUBJECT}" \
+       STORAGE_BACKEND="${STORAGE_BACKEND:-firestore}" REMEDIATION_ADMINS="${REMEDIATION_ADMINS:-$ADMIN_SUBJECT}" \
        GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}" \
        USE_IAP="${USE_IAP:-true}" \
        SA_EMAIL="${SA_EMAIL:-}"
@@ -122,4 +122,8 @@ case "${DEPLOY_MODE:-service}" in
   *) die "DEPLOY_MODE must be service | job | both (got '${DEPLOY_MODE:-}')" ;;
 esac
 
-say "Deploy complete ($PROJECT). Do the NEXT STEP printed just above (authorize domain-wide delegation), then: bash open-panel.sh"
+if [ "${USE_IAP:-true}" = "true" ]; then
+  say "Deploy complete ($PROJECT). NEXT: authorize domain-wide delegation (printed just above), then run: bash enable-iap.sh"
+else
+  say "Deploy complete ($PROJECT). NEXT: authorize domain-wide delegation (printed just above), then run: bash open-panel.sh"
+fi
