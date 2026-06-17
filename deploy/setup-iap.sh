@@ -20,8 +20,10 @@ PNUM="$($GC projects describe "$PROJECT" --format='value(projectNumber)')"
 RUNTIME_SA="${SA_EMAIL:-gws-connector@${PROJECT}.iam.gserviceaccount.com}"
 AUD="/projects/${PNUM}/locations/${REGION}/services/${SERVICE}"
 
-echo "==> [1/6] Enable IAP API + create the IAP service agent (idempotent)"
-$GC services enable iap.googleapis.com --project="$PROJECT"
+echo "==> [1/6] Enable required APIs + create the IAP service agent (idempotent)"
+# cloudresourcemanager is needed for the IAP/IAM operations below; enable it up front so the later
+# 'gcloud ... --iap' step does not stop on an interactive 'enable and retry? (y/N)' prompt.
+$GC services enable iap.googleapis.com cloudresourcemanager.googleapis.com --project="$PROJECT"
 $GC beta services identity create --service=iap.googleapis.com --project="$PROJECT" >/dev/null 2>&1 || true
 
 echo "==> [2/6] Enable IAP on the Cloud Run service (same run.app URL, no load balancer)"
