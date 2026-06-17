@@ -94,6 +94,25 @@ export PROJECT REGION="${REGION:-europe-west1}" ADMIN_SUBJECT DOMAIN CUSTOMER_ID
        GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}" \
        SA_EMAIL="${SA_EMAIL:-}"
 
+# The admin-UI SERVICE fail-closes on Cloud Run with no sign-in method, so the container would
+# never start (opaque "failed to listen on PORT 8080"). Catch it here with clear guidance.
+case "${DEPLOY_MODE:-service}" in
+  service|both)
+    if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
+      printf '\n\033[0;31mThe admin-UI SERVICE needs a Google sign-in method, or its container will not start.\033[0m\n'
+      echo "Do ONE of these, then run 'bash deploy/setup.sh' again:"
+      echo "  A) Create a Web OAuth client (one time) and set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in deploy/customer.env:"
+      echo "       APIs & Services -> OAuth consent screen -> Internal -> save"
+      echo "       APIs & Services -> Credentials -> Create credentials -> OAuth client ID -> Web application"
+      echo "       Authorized redirect URI:  http://localhost:8080/auth/callback   (for 'gcloud run services proxy' access)"
+      echo "       copy the Client ID + secret into deploy/customer.env"
+      echo "  B) Just want a headless scan test (no UI)? Set in deploy/customer.env:  DEPLOY_MODE=job  and  STORAGE_BACKEND=firestore"
+      command -v cloudshell >/dev/null 2>&1 && cloudshell edit "$CFG" || true
+      die "No sign-in method for the SERVICE — see the two options above."
+    fi
+    ;;
+esac
+
 case "${DEPLOY_MODE:-service}" in
   service) say "Deploying the Cloud Run SERVICE (admin UI + scheduled scans)"; bash "$HERE/deploy-to-gcp.sh" ;;
   job)     say "Deploying the Cloud Run JOB (large-feed backfill, no request timeout)"; bash "$HERE/deploy-job.sh" ;;

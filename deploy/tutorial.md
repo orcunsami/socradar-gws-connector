@@ -47,6 +47,21 @@ later). `DEPLOY_MODE` picks `service` (default), `job` (large-feed backfill), or
 
 **Save the file** (Cmd/Ctrl+S) when done.
 
+## Create the sign-in client (required for the admin UI)
+
+The admin UI uses "Sign in with Google", so it needs one OAuth client. Without it the service will not
+start. Create it once (about 1 minute):
+
+1. **APIs & Services → OAuth consent screen** → User type **Internal** → app name `gws-connector` → Save.
+2. **APIs & Services → Credentials → Create credentials → OAuth client ID** → type **Web application**.
+3. Under **Authorized redirect URIs** add `http://localhost:8080/auth/callback` (used by the `proxy` access below).
+4. Create, then copy the **Client ID** and **Client secret** into `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
+   in <walkthrough-editor-open-file filePath="deploy/customer.env">deploy/customer.env</walkthrough-editor-open-file>,
+   and save.
+
+Just want a headless scan test (no UI)? Skip this step and set `DEPLOY_MODE=job` and `STORAGE_BACKEND=firestore`
+in `deploy/customer.env` instead — the Job scans and reports without a UI.
+
 ## Deploy
 
 Now deploy. This validates your config and builds everything:

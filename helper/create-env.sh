@@ -128,7 +128,9 @@ FEED_COMPANY_ID=
 # --------------------------------------------------------------------
 FEED_BASE=https://platform.socradar.com
 
-# Optional: admin UI "Sign in with Google" (you can add these later).
+# REQUIRED for the admin UI (DEPLOY_MODE=service): the SERVICE will not start on Cloud Run without a
+# sign-in method. Create a Web OAuth client (Internal consent screen, redirect
+# http://localhost:8080/auth/callback) and paste id+secret here. Leave empty ONLY for DEPLOY_MODE=job.
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 
@@ -146,7 +148,10 @@ cat <<EOF
   1. Open deploy/customer.env and paste your SOCRadar FEED_API_KEY + FEED_COMPANY_ID. Save.
      ADMIN_SUBJECT is set to you ($ACCT) for a quick test; switch it to a dedicated
      least-privilege admin for production. It must be a real, existing admin either way.
-  2. Run:  bash deploy/setup.sh    to validate and deploy.
+  2. The admin UI (DEPLOY_MODE=service) needs a Google sign-in client: set GOOGLE_CLIENT_ID +
+     GOOGLE_CLIENT_SECRET (see the tutorial step), OR for a headless scan test set DEPLOY_MODE=job
+     and STORAGE_BACKEND=firestore. The SERVICE will not start without a sign-in method.
+  3. Run:  bash deploy/setup.sh    to validate and deploy.
 EOF
 
 # In Cloud Shell, open the file in the editor for the customer.
