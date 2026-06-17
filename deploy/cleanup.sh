@@ -65,10 +65,24 @@ if [ "${UNLINK_BILLING:-0}" = "1" ]; then
   echo "    (delete the \$10 budget too: gcloud billing budgets list --billing-account=... then ...delete)"
 fi
 
+# Optional CLEAN-SLATE: also wipe the DURABLE data (Firestore + BigQuery). OFF by default so a normal
+# cost-teardown KEEPS the audit trail (durability). PURGE_DATA=1 makes it a true fresh start — use it for
+# re-onboarding or a clean trial, so you never build on top of a previous run's leftover data.
+if [ "${PURGE_DATA:-0}" = "1" ]; then
+  echo "==> PURGE_DATA: wiping ALL Firestore data (tenants/flagged/scan/audit/approvals) — irreversible"
+  $GC firestore bulk-delete \
+    --collection-ids=tenants,flagged_users,scan_runs,audit_log,audit_heads,approvals \
+    --database='(default)' --project="$PROJECT" --quiet 2>/dev/null \
+    || echo "   (firestore bulk-delete skipped — no data / not a firestore deploy)"
+  echo "==> PURGE_DATA: deleting the BigQuery analytics dataset (if any)"
+  command -v bq >/dev/null 2>&1 && bq rm -r -f --dataset "$PROJECT:socradar" 2>/dev/null || echo "   (no BigQuery dataset / bq not installed)"
+  echo "    NOTE: Firestore bulk-delete is ASYNC — give it a minute, then the connector re-bootstraps a fresh"
+  echo "    default tenant (with the feed key from Secret Manager) on the next request. Clean slate, no re-enter."
+fi
+
 echo "==> NOTE: the runtime SA (gws-connector@$PROJECT...) and the DWD authorization are left in place"
-echo "    (both are zero-cost IAM objects). Full decommission: delete the SA + remove the DWD client in admin.google.com."
-echo "==> NOTE: if you deployed with STORAGE_BACKEND=firestore or ANALYTICS_BIGQUERY=true, the durable"
-echo "    data stores are intentionally NOT auto-deleted (they may hold your audit trail). Remove manually:"
-echo "      gcloud firestore databases delete '(default)' --project=$PROJECT --quiet"
-echo "      bq rm -r -f --dataset $PROJECT:socradar"
+echo "    (both are zero-cost IAM objects, and keeping them means you do NOT have to re-authorize DWD)."
+echo "    Full decommission: delete the SA + remove the DWD client in admin.google.com."
+echo "==> NOTE: durable data (Firestore/BigQuery) is kept by default. For a CLEAN SLATE re-run with PURGE_DATA=1:"
+echo "      PROJECT=$PROJECT PURGE_DATA=1 bash deploy/cleanup.sh"
 echo "Done."
