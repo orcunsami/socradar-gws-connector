@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # back to request.url_for (only correct when the app is reached directly, e.g. behind IAP on its real URL).
     oauth_redirect_base: str = "http://localhost:8080"
 
+    # IAP mode: when the service is fronted by native Cloud Run IAP, IAP authenticates the user at the
+    # edge and injects a signed X-Goog-IAP-JWT-Assertion. The app then trusts that VERIFIED identity and
+    # does NOT run its own "Sign in with Google" OAuth (no app-side redirect -> no redirect_uri_mismatch).
+    iap_mode: bool = False
+    # Expected JWT audience for IAP verification: /projects/PROJECT_NUMBER/locations/REGION/services/SERVICE.
+    # Set by deploy/setup-iap.sh. If empty, the signature + issuer are still verified but the audience is not.
+    iap_audience: str = ""
+
     # connector identity (keyless DWD). On Cloud Run, auth is the ambient metadata token (gcloud_path unused).
     gcloud_path: str = "gcloud"                   # local-dev fallback only; resolved from PATH
     service_account: str = ""                     # the DWD-authorized runtime SA (set at deploy)
@@ -159,9 +167,22 @@ def assert_startup_safe() -> list[str]:
         raise RuntimeError("FATAL: default SECRET_KEY on Cloud Run — set a real SECRET_KEY (session forgery risk).")
     # fail-CLOSED on a service nobody can sign into (DEV_LOGIN off in prod + no OAuth = a dead-end UI).
     # Better a loud startup failure the customer sees than a 'healthy' service no admin can enter.
-    if is_cloud_run() and not settings.oauth_configured and not settings.dev_login:
+    if is_cloud_run() and not settings.oauth_configured and not settings.dev_login and not settings.iap_mode:
         raise RuntimeError("FATAL: no sign-in method on Cloud Run — set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET "
-                           "(create a Web OAuth client with the service's callback URL). Without it the UI cannot be entered.")
+                           "(create a Web OAuth client), OR front the service with native IAP and set IAP_MODE=true "
+                           "(deploy/setup-iap.sh). Without a sign-in method the UI cannot be entered.")
+    # IAP mode fail-closed: the audience binds an assertion to THIS service and ALLOWED_DOMAIN restricts who
+    # may enter. Empty audience -> any validly-IAP-signed token (even one minted for a DIFFERENT resource)
+    # would be accepted (confused-deputy). Empty domain -> any Google account IAP lets in could enter. Refuse
+    # to start, mirroring the DEV_LOGIN / default-SECRET_KEY guards above. deploy/setup-iap.sh sets both.
+    if settings.iap_mode:
+        if not settings.iap_audience:
+            raise RuntimeError("FATAL: IAP_MODE=true but IAP_AUDIENCE is empty — the audience binds the IAP "
+                               "assertion to THIS Cloud Run service; without it a token minted for another IAP "
+                               "resource would be accepted. Run deploy/setup-iap.sh (it sets IAP_AUDIENCE).")
+        if not settings.allowed_domain:
+            raise RuntimeError("FATAL: IAP_MODE=true but ALLOWED_DOMAIN is empty — no org restriction on who "
+                               "may enter the admin UI. Set ALLOWED_DOMAIN (the deploy sets it from DOMAIN).")
     if settings.dev_login_active:
         warnings.append("DEV_LOGIN active (auth bypass) — local dev only; MUST be off in production.")
     if settings.oauth_configured and not settings.allowed_domain:

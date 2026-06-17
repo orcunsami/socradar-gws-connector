@@ -1,45 +1,68 @@
 #!/usr/bin/env bash
-# Optional hardening: put Identity-Aware Proxy (IAP) in front of the private Cloud Run service as an
-# INDEPENDENT second auth door (defense-in-depth) on top of the app's own Google OAuth + RBAC.
+# Put native Cloud Run IAP in front of the admin UI and let it REPLACE the app's own "Sign in with
+# Google". IAP authenticates the user at the edge (the SAME https://SERVICE-...run.app URL — no load
+# balancer, no DNS, no cost) and injects a signed assertion the app verifies (app/iap.py). This removes
+# the app-side OAuth redirect entirely, so the Cloud Shell `redirect_uri_mismatch` disappears: you just
+# open the run.app URL in a browser and IAP signs you in.
 #
-# Why: if the app's own OAuth has a bug or an over-broad "any org user" policy, IAP is a separate,
-# Google-managed, IAM-revocable gate that authenticates EVERY request before it reaches the container.
+#   PROJECT=... REGION=europe-west1 SERVICE=gws-connector IAP_MEMBERS=user:you@yourdomain.com \
+#       bash deploy/setup-iap.sh
 #
-# ⚠️ CAVEAT (verified): IAP replaces the caller identity → it can BREAK the Cloud Scheduler -> /tasks/scan
-# path. Either (a) give the scheduler SA roles/iap.httpsResourceAccessor + have it mint an IAP OIDC token,
-# or (b) keep /tasks/scan on a separate route/identity (it is already guarded by SCAN_TRIGGER_TOKEN).
-# NOTE: the app does NOT yet validate the X-Goog-IAP-JWT-Assertion header — IAP gating here is enforced at
-# the INFRA layer only (IAP + IAM). For full app-layer defense the app should also verify the assertion
-# (ES256, iss=https://cloud.google.com/iap, correct aud) — see docs/security-hardening.md "IAP" (P2).
-# Keep --no-allow-unauthenticated regardless.
+# The connector's Workspace access is unaffected (keyless domain-wide delegation, not the user's OAuth).
 set -euo pipefail
 
-: "${PROJECT:?set PROJECT}"; : "${SERVICE:?set SERVICE (the Cloud Run service name)}"
-: "${REGION:?set REGION}"; : "${IAP_MEMBERS:?set IAP_MEMBERS (comma user:EMAIL or group:EMAIL list)}"
-GC="gcloud"
-PROJECT_NUMBER="$($GC projects describe "$PROJECT" --format='value(projectNumber)')"
+: "${PROJECT:?set PROJECT}"
+SERVICE="${SERVICE:-gws-connector}"
+REGION="${REGION:-europe-west1}"
+: "${IAP_MEMBERS:?set IAP_MEMBERS (comma-separated, e.g. user:you@yourdomain.com or group:admins@yourdomain.com)}"
+GC="${GCLOUD:-gcloud}"
+PNUM="$($GC projects describe "$PROJECT" --format='value(projectNumber)')"
+RUNTIME_SA="${SA_EMAIL:-gws-connector@${PROJECT}.iam.gserviceaccount.com}"
+AUD="/projects/${PNUM}/locations/${REGION}/services/${SERVICE}"
 
-echo "==> Enable IAP API"
+echo "==> [1/6] Enable IAP API + create the IAP service agent (idempotent)"
 $GC services enable iap.googleapis.com --project="$PROJECT"
+$GC beta services identity create --service=iap.googleapis.com --project="$PROJECT" >/dev/null 2>&1 || true
 
-echo "==> Restrict ingress (internal + load balancing; Scheduler internal traffic still allowed)"
-$GC run services update "$SERVICE" --region="$REGION" --project="$PROJECT" \
-  --ingress=internal-and-cloud-load-balancing
+echo "==> [2/6] Enable IAP on the Cloud Run service (same run.app URL, no load balancer) + keep it private"
+$GC run services update "$SERVICE" --region="$REGION" --project="$PROJECT" --iap --no-allow-unauthenticated
 
-echo "==> Enable IAP on the Cloud Run service"
-$GC run services update "$SERVICE" --region="$REGION" --project="$PROJECT" --iap
-
-echo "==> Grant the IAP service agent run.invoker"
+echo "==> [3/6] Let the IAP service agent invoke the service"
 $GC run services add-iam-policy-binding "$SERVICE" --region="$REGION" --project="$PROJECT" \
-  --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com" \
-  --role="roles/run.invoker"
+  --member="serviceAccount:service-${PNUM}@gcp-sa-iap.iam.gserviceaccount.com" \
+  --role="roles/run.invoker" >/dev/null
 
-echo "==> Grant human operators IAP access (who may even reach the app)"
+echo "==> [4/6] Switch the app to IAP identity (drops its own OAuth; GOOGLE_CLIENT_ID no longer needed)"
+$GC run services update "$SERVICE" --region="$REGION" --project="$PROJECT" \
+  --update-env-vars="IAP_MODE=true,IAP_AUDIENCE=${AUD}"
+
+echo "==> [5/6] Grant access (roles/iap.httpsResourceAccessor) to your admins + the scheduler SA"
 IFS=',' read -ra MEMBERS <<< "$IAP_MEMBERS"
-for m in "${MEMBERS[@]}"; do
+for m in "${MEMBERS[@]}" "serviceAccount:${RUNTIME_SA}"; do
   $GC iap web add-iam-policy-binding --resource-type=cloud-run --service="$SERVICE" \
-    --region="$REGION" --project="$PROJECT" --member="$m" --role="roles/iap.httpsResourceAccessor"
+    --region="$REGION" --project="$PROJECT" --member="$m" --role="roles/iap.httpsResourceAccessor" >/dev/null \
+    && echo "    + $m" || echo "    (could not grant $m — add it manually if needed)"
 done
 
-echo "==> Done. The service now requires: IAP (Google identity + IAM) -> app OAuth -> RBAC. Three gates."
-echo "    Remember the Scheduler caveat above for /tasks/scan."
+URL="$($GC run services describe "$SERVICE" --region="$REGION" --project="$PROJECT" --format='value(status.url)' 2>/dev/null || echo '(describe failed)')"
+cat <<EOF
+
+============================================================================
+  IAP IS ON. Open the admin UI directly in your browser (IAP signs you in):
+      $URL
+  No proxy, no Web Preview, no redirect_uri — IAP authenticates at the edge and
+  the app verifies the signed assertion + your domain ($SERVICE uses ALLOWED_DOMAIN).
+============================================================================
+
+  Security model: the admin UI is gated by IAP — the app cryptographically VERIFIES the IAP assertion
+  (app/iap.py: ES256 + iss + this service's aud + your domain) and serves NOTHING without a valid one, so a
+  direct (non-IAP) caller cannot enter the UI. The runtime SA still holds run.invoker (it is the scheduler's
+  identity), so a parallel non-IAP ingress path exists for it; that path can only reach /tasks/scan, which is
+  separately gated by SCAN_TRIGGER_TOKEN. For a single locked ingress, migrate the scheduler to call through
+  IAP (OIDC aud = the IAP OAuth client) and then revoke run.invoker from the runtime SA.
+
+  Scheduler note: the periodic-scan jobs call with an OIDC token whose audience is the run.app URL, which IAP
+  rejects. Until reconfigured, trigger scans from the UI (Dashboard -> Run scan) or via /tasks/scan with the
+  SCAN_TRIGGER_TOKEN. Disable IAP again:
+      gcloud run services update $SERVICE --region=$REGION --no-iap --update-env-vars IAP_MODE=false
+EOF

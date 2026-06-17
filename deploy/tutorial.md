@@ -106,23 +106,24 @@ https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.google
 
 ## 6) Open the panel and run a scan
 
-The service is private. Open it with one helper (it reads your project and region from `deploy/customer.env`,
-so you do not type any flags). Keep it running:
+The service is private, so it needs a sign-in gate. The cleanest way that works from anywhere — including
+Cloud Shell — is **native IAP**: it signs you in at Google's edge on the same `run.app` URL, with no proxy and
+no redirect step. Enable it (grants you access and switches the app to IAP identity):
 
 ```sh
-bash open-panel.sh
+PROJECT="$(grep -E '^PROJECT=' deploy/customer.env | cut -d= -f2 | tr -d ' ')" \
+IAP_MEMBERS="user:$(gcloud config get-value account)" \
+bash deploy/setup-iap.sh
 ```
 
-When it says `proxies to ...`, click Cloud Shell's **Web Preview → Preview on port 8080** (the monitor icon at
-the top-right of Cloud Shell). **Do not open the `run.app` URL directly** — that bypasses the proxy and returns
-403. Sign in with a `@your-domain` account, then go to **Dashboard → Run scan** and check **Flagged Users**.
+It prints your service URL. **Open that `https://...run.app` URL directly in your browser** — IAP signs you in
+with Google, then go to **Dashboard → Run scan** and check **Flagged Users**. (With IAP on, the OAuth client
+from step 3 is no longer used for the UI; the app trusts the IAP-verified identity.)
 
-If sign-in shows `redirect_uri_mismatch`, the error page lists the exact callback URL the app used — copy it and
-add it under your OAuth client's **Authorized redirect URIs** (Console → Clients → your client), then sign in
-again. This happens because Cloud Shell's preview URL differs from `localhost`.
-
-For a real production URL (and to avoid the redirect step), put Identity-Aware Proxy in front instead — see
-`deploy/setup-iap.sh`.
+**Why not the proxy + Web Preview?** Behind `gcloud run services proxy` the app sees the `run.app` host, so its
+OAuth callback can never match `localhost:8080`, and Cloud Shell's preview URL carries query params Google will
+not register — you would hit `redirect_uri_mismatch`. The proxy path (`bash open-panel.sh`) works **only on your
+OWN machine**, where `localhost:8080` really is your browser's localhost. In Cloud Shell, use IAP above.
 
 ## 7) Clean up (return to zero cost)
 

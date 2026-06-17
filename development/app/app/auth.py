@@ -13,6 +13,7 @@ from fastapi import HTTPException, Request
 from starlette.responses import RedirectResponse
 
 from .config import settings
+from .iap import iap_identity
 
 oauth = OAuth()
 if settings.oauth_configured:
@@ -26,6 +27,9 @@ if settings.oauth_configured:
 
 
 def current_user(request: Request) -> dict | None:
+    # In IAP mode the user is authenticated at the IAP edge; trust the VERIFIED assertion, not a session.
+    if settings.iap_mode:
+        return iap_identity(request)
     return request.session.get("user")
 
 
@@ -38,12 +42,18 @@ def is_remediation_admin(email: str) -> bool:
 def require_login(request: Request) -> dict:
     user = current_user(request)
     if not user:
+        if settings.iap_mode:
+            # IAP should have blocked unauthenticated callers at the edge; reaching here without a valid
+            # assertion means a misconfig (or a non-IAP caller). Fail closed, do not bounce to app login.
+            raise HTTPException(status_code=403, detail="IAP identity missing or invalid")
         raise HTTPException(status_code=307, detail="login required",
                             headers={"Location": "/login"})
     return user
 
 
 async def start_login(request: Request):
+    if settings.iap_mode:
+        return RedirectResponse("/", status_code=303)   # IAP already authenticated the user; no app OAuth
     if settings.dev_login_active:   # honored only off-Cloud-Run + APP_ENV=dev (config.dev_login_active)
         request.session["user"] = {"email": settings.admin_subject, "name": "Dev Admin", "dev": True}
         return RedirectResponse("/", status_code=303)
