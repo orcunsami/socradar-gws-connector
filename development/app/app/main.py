@@ -420,13 +420,15 @@ def settings_save(request: Request, verified_domains: str = Form(""), feed_base:
     asub = admin_subject.strip().lower()
     if asub and ("@" not in asub or not connector.in_verified_domains(asub, domains)):
         return RedirectResponse("/settings?err=adminsub", status_code=303)
+    new_lookback = feed_lookback_days if feed_lookback_days in (0, 1, 7, 30, 90, 182, 365) else 0
+    new_start = feed_start_date.strip() or t["feed_start_date"]
     fields = {
         "verified_domains": json.dumps(domains),
         "feed_base": feed_base.strip() or t["feed_base"],
         "feed_company_id": feed_company_id.strip() or t["feed_company_id"],
-        "feed_start_date": feed_start_date.strip() or t["feed_start_date"],
+        "feed_start_date": new_start,
         # rolling-window preset (today - N). 0 = use the fixed feed_start_date. Validated against the offered set.
-        "feed_lookback_days": feed_lookback_days if feed_lookback_days in (0, 1, 7, 30, 90, 182, 365) else 0,
+        "feed_lookback_days": new_lookback,
         "enabled_actions": json.dumps(valid_actions),
         "quarantine_group": qg,
         "admin_subject": asub,
@@ -434,6 +436,13 @@ def settings_save(request: Request, verified_domains: str = Form(""), feed_base:
     }
     if feed_api_key.strip():                 # only overwrite key if a new one was typed
         fields["feed_api_key"] = feed_api_key.strip()
+    # If the feed WINDOW changed, drop the incremental high-water mark so the NEXT scan actually honors the
+    # new window. Without this, once a tenant has scanned once _effective_start_date() returns at the
+    # high-water branch, and a new "Last 1 year" / custom start date silently does nothing (every scan keeps
+    # starting from the last run). Resetting forces one re-backfill from the new start, then it resumes incremental.
+    cur_lookback = (t["feed_lookback_days"] if "feed_lookback_days" in t.keys() else 0) or 0
+    if new_lookback != cur_lookback or new_start != t["feed_start_date"]:
+        fields["feed_high_water"] = ""
     db.update_tenant(t["id"], **fields)
     db.audit(t["id"], user["email"], "settings", "ok",
              detail=f"domains={domains} actions={valid_actions}")

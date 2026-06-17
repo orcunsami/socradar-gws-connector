@@ -29,8 +29,8 @@
       <label>Company ID</label>
       <input type="text" name="feed_company_id" value="{{ tenant.feed_company_id }}">
       <label>Feed window
-        <span class="help-icon" tabindex="0" data-tip="How far back each scan reads the feed. It's a ROLLING window (Last 7 days = the 7 days before each scan, recomputed every run). The feed filters by date, so the smallest window is 24 hours. Pick 'Custom date' to set a fixed start instead.">i</span>
-        <span class="muted small">(rolling lookback)</span></label>
+        <span class="help-icon" tabindex="0" data-tip="How far back the scan reads the SOCRadar feed. After a full scan the connector remembers a high-water mark, so later scans only read NEW entries (fast). Changing this re-applies the window: the next scan re-reads from the new start, then resumes incremental. A wide window like 'Last 1 year' reads a lot of data and takes longer. The feed filters by date, so the smallest window is 24 hours. Pick 'Custom date' to set a fixed start instead.">i</span>
+        <span class="muted small">(backfill window)</span></label>
       <select name="feed_lookback_days">
         <option value="1"   {% if tenant.feed_lookback_days == 1 %}selected{% endif %}>Last 24 hours</option>
         <option value="7"   {% if tenant.feed_lookback_days == 7 %}selected{% endif %}>Last 7 days</option>
