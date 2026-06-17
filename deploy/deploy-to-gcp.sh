@@ -97,12 +97,40 @@ if [ "$STORAGE_BACKEND" = "firestore" ]; then
   $GC services enable firestore.googleapis.com --project="$PROJECT"
   $GC projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:$SA" --role="roles/datastore.user" --condition=None >/dev/null 2>&1 || true
-  # Auto-create the (default) Native-mode database so the customer never has to. Idempotent: a re-run just
-  # hits 'already exists' (the || branch). Native mode is the default when --type is omitted.
-  echo "    Ensuring the Firestore (default) Native-mode database exists in $REGION (one-time, ~30s)..."
-  $GC firestore databases create --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 \
-    && echo "    + Firestore (default) database created." \
-    || echo "    + Firestore (default) database already exists."
+  # Ensure the (default) Native-mode DB exists AND is genuinely USABLE before deploying. Never mask failures:
+  # a still-deleting DB reports "already exists" and a recently-deleted id sits in a post-delete cooldown where
+  # create fails — deploying then ships an app that cannot reach Firestore and CRASHES on startup ("container
+  # failed to start"). So we VERIFY state (describe + deleteTime), auto-wait a short cooldown, else STOP LOUD.
+  echo "    Ensuring the Firestore (default) Native-mode database exists + is usable in $REGION..."
+  fs_ready=0
+  for attempt in 1 2 3 4 5 6 7 8; do
+    del_at="$($GC firestore databases describe --database='(default)' --project="$PROJECT" --format='value(deleteTime)' 2>/dev/null)" && present=1 || present=0
+    if [ "$present" = 1 ] && [ -z "$del_at" ]; then
+      echo "    + Firestore (default) database present and active."; fs_ready=1; break
+    fi
+    if [ "$present" = 1 ] && [ -n "$del_at" ]; then
+      echo "    Firestore (default) is still being DELETED (deleteTime=$del_at) — waiting 30s ($attempt/8)..."
+      sleep 30; continue
+    fi
+    if out="$($GC firestore databases create --location="$REGION" --project="$PROJECT" 2>&1)"; then
+      echo "    + Firestore (default) database created."; fs_ready=1; break
+    fi
+    if printf '%s' "$out" | grep -qiE 'recently deleted|not available|unavailable|try again|FAILED_PRECONDITION|already in use'; then
+      echo "    Firestore (default) in a post-delete cooldown — waiting 30s ($attempt/8)..."; sleep 30; continue
+    fi
+    if printf '%s' "$out" | grep -qiE 'already exists'; then
+      sleep 10; continue   # race vs an in-flight delete — re-describe on the next loop
+    fi
+    echo "    FATAL: could not create the Firestore (default) database:"; printf '%s\n' "$out" | sed 's/^/      /'
+    echo "    Fix the cause above (or set STORAGE_BACKEND=sqlite for a throwaway demo), then re-run setup.sh."; exit 1
+  done
+  if [ "$fs_ready" -ne 1 ]; then
+    echo "    FATAL: Firestore (default) is STILL not usable after waiting (a post-delete cooldown can take"
+    echo "    several minutes). NOT deploying — the app would crash on startup with no reachable Firestore."
+    echo "    WAIT ~5-10 min, then re-run setup.sh. TIP: to wipe data WITHOUT this cooldown, use"
+    echo "    'PROJECT=$PROJECT PURGE_DATA=1 bash deploy/cleanup.sh' (collection bulk-delete), NOT 'databases delete'."
+    exit 1
+  fi
   # Best-effort composite index so the /audit view stays fast as the log grows (the app falls back to a
   # bounded read until it builds; index build is async/minutes). Safe to ignore if it already exists.
   $GC firestore indexes composite create --collection-group=audit_log \
