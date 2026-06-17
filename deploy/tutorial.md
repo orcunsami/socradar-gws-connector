@@ -107,13 +107,11 @@ https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.google
 ## 6) Open the panel and run a scan
 
 The service is private, so it needs a sign-in gate. The cleanest way that works from anywhere — including
-Cloud Shell — is **native IAP**: it signs you in at Google's edge on the same `run.app` URL, with no proxy and
-no redirect step. Enable it (grants you access and switches the app to IAP identity):
+Cloud Shell — is **native IAP**: Google signs you in at the edge on the same `run.app` URL, with no proxy and
+no redirect step. Turn it on with one command (it reads your project and grants you access automatically):
 
 ```sh
-PROJECT="$(grep -E '^PROJECT=' deploy/customer.env | cut -d= -f2 | tr -d ' ')" \
-IAP_MEMBERS="user:$(gcloud config get-value account)" \
-bash deploy/setup-iap.sh
+bash enable-iap.sh
 ```
 
 It prints your service URL. **Open that `https://...run.app` URL directly in your browser** — IAP signs you in
