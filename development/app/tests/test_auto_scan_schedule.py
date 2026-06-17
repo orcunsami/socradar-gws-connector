@@ -105,5 +105,15 @@ cl.post("/settings", data={"verified_domains": "ex.com", "feed_base": t["feed_ba
         follow_redirects=False)
 chk("invalid scan_interval -> coerced to off", db.get_tenant(tid)["scan_interval"] == "off")
 
+# 9) a range of invalid scan_interval values each OVERWRITE a valid one back to 'off' (not just '5s')
+for bad in ["", "weekly", "30 m", "0", "5h", "off ", "DAILY"]:
+    db.update_tenant(tid, scan_interval="30m")   # start from a valid value
+    t = db.get_tenant(tid)
+    cl.post("/settings", data={"verified_domains": "ex.com", "feed_base": t["feed_base"],
+                               "feed_company_id": t["feed_company_id"], "feed_start_date": t["feed_start_date"],
+                               "feed_lookback_days": "0", "scan_interval": bad, "csrf": CSRF},
+            follow_redirects=False)
+    chk(f"invalid scan_interval {bad!r} overwrites a valid value -> off", db.get_tenant(tid)["scan_interval"] == "off")
+
 print(f"\nRESULT: {'PASS' if F == 0 else 'FAIL'} — auto-scan schedule (interval persist + due-check + force) ({P} ok, {F} fail)")
 sys.exit(0 if F == 0 else 1)

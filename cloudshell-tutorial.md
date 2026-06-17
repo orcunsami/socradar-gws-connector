@@ -6,7 +6,8 @@ Cloud Shell **side panel** when you use the "Open in Cloud Shell" button (it is 
 The connector deploys into **your own** Google Cloud project as a private Cloud Run service, running keyless
 (no service-account key file). It takes about 10 minutes. SOCRadar hosts nothing.
 
-The whole flow is **one config file and one command, run twice**.
+The whole flow is **three commands**: `create-env.sh` (writes your config) → `setup.sh` (deploys) →
+`enable-iap.sh` (turns on sign-in). Sign-in is native IAP — there is no OAuth client to create.
 
 ## Before you begin
 
@@ -22,11 +23,11 @@ If billing shows `False`, link a billing account in the console first (**Billing
 
 ## Step 1 — Create your config file
 
-Run the setup helper once. It copies the template to your own **`deploy/customer.env`** (git-ignored, so your
-secrets never commit) and opens it in the editor:
+Run the config helper once. It auto-detects your project, domain and region, writes your own
+**`deploy/customer.env`** (git-ignored, so your secrets never commit), and opens it in the editor:
 
 ```bash
-bash setup.sh
+bash create-env.sh
 ```
 
 ## Step 2 — Fill in your values
@@ -68,21 +69,20 @@ Your Workspace **super admin** authorizes the connector once:
 3. **OAuth scopes**: paste the four scopes from Step 3 as one comma-separated line.
 4. Authorize. Propagation is usually minutes (up to 24h).
 
-## Step 5 — Open the panel and run a scan
+## Step 5 — Turn on sign-in and open the panel
 
-The service is private. Tunnel to it (keep this running):
-
-```bash
-gcloud run services proxy gws-connector --region=europe-west1
-```
-
-Open the Web Preview on port 8080, sign in, go to **Dashboard → Run scan**, then check **Flagged Users**.
-
-For a real production URL, put Identity-Aware Proxy in front:
+Sign-in is **native IAP** — one command enables it and prints your admin URL (it reads your project/region
+from `deploy/customer.env`):
 
 ```bash
-IAP_MEMBERS=user:admin@your-domain.com PROJECT="$(gcloud config get-value project)" REGION=europe-west1 SERVICE=gws-connector bash deploy/setup-iap.sh
+bash enable-iap.sh
 ```
+
+Open the printed `https://...run.app` URL in your browser — IAP signs you in with Google. Go to
+**Dashboard → Run scan**, then check **Flagged Users**. To scan on a schedule, set **Settings → Feed → Auto-scan**.
+
+(Alternative, `USE_IAP=false` only: tunnel with `gcloud run services proxy gws-connector --region=europe-west1`
+and open the Web Preview on port 8080 — works only on your own machine, not in Cloud Shell.)
 
 ## Step 6 — Clean up (return to zero cost)
 

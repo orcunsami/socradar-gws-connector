@@ -388,7 +388,9 @@ def recent_scans(tenant_id, limit=20):
     with conn() as c:
         return [dict(r) for r in c.execute(
             "SELECT * FROM scan_runs WHERE tenant_id=? AND finished_at IS NOT NULL "
-            "ORDER BY id DESC LIMIT ?", (tid, limit)).fetchall()]
+            # order by started_at (id as a deterministic tie-break) to MATCH the firestore backend, so the
+            # /tasks/scan due-check picks the same "most recent finished scan" on either store.
+            "ORDER BY started_at DESC, id DESC LIMIT ?", (tid, limit)).fetchall()]
 
 
 # ---------- audit (hash chain computed by the db facade; appended ATOMICALLY here) ----------

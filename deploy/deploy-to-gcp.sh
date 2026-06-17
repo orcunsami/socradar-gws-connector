@@ -91,7 +91,7 @@ $GC secrets add-iam-policy-binding audit-hmac-key \
   --member="serviceAccount:$SA" --role="roles/secretmanager.secretAccessor" \
   --project="$PROJECT" >/dev/null
 
-STORAGE_BACKEND="${STORAGE_BACKEND:-sqlite}"
+STORAGE_BACKEND="${STORAGE_BACKEND:-firestore}"   # durable by default (matches create-env/customer.env/setup.sh); set sqlite only for a throwaway demo
 if [ "$STORAGE_BACKEND" = "firestore" ]; then
   echo "==> [4b/6] Durable storage: Firestore (audit + flagged + scan history survive restart/scale-to-zero)"
   $GC services enable firestore.googleapis.com --project="$PROJECT"

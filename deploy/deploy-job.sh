@@ -74,7 +74,7 @@ SECRET_KEY="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
   --set-env-vars="^##^APP_ENV=prod##SERVICE_ACCOUNT=$SA##ADMIN_SUBJECT=$ADMIN_SUBJECT##ALLOWED_DOMAIN=$DOMAIN##DEFAULT_DOMAIN=$DOMAIN##DEFAULT_CUSTOMER_ID=$CUSTOMER_ID##FEED_BASE=$FEED_BASE##FEED_COMPANY_ID=$FEED_COMPANY_ID##FEED_FULL_SCAN=true##FEED_OVERLAP_DAYS=${FEED_OVERLAP_DAYS:-7}##SCAN_PAGES_PER_RUN=0##FEED_LOOKBACK_DAYS=${FEED_LOOKBACK_DAYS:-0}##FEED_START_DATE=${FEED_START_DATE:-2026-06-01}##SECRET_KEY=$SECRET_KEY##STORAGE_BACKEND=$STORAGE_BACKEND##DB_PATH=/tmp/app.sqlite3##PROJECT_ID=$PROJECT" \
   --project="$PROJECT" )
 
-echo "==> [2/3] Cloud Scheduler -> trigger the Job (jobs:run) on a schedule (${SCAN_SCHEDULE:-0 */6 * * *})"
+echo "==> [2/3] Cloud Scheduler -> trigger the Job (jobs:run) on a schedule (${SCAN_SCHEDULE:-*/30 * * * *})"
 $GC services enable cloudscheduler.googleapis.com --project="$PROJECT" 2>/dev/null || true
 # the scheduler SA needs run.invoker (jobs.run) on the project/job; reuse the runtime SA.
 $GC projects add-iam-policy-binding "$PROJECT" \
@@ -83,9 +83,9 @@ $GC projects add-iam-policy-binding "$PROJECT" \
 JOB_RUN_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${JOB}:run"
 $GC scheduler jobs delete gws-scan-job-trigger --location="$REGION" --project="$PROJECT" --quiet 2>/dev/null || true
 $GC scheduler jobs create http gws-scan-job-trigger --location="$REGION" --project="$PROJECT" \
-  --schedule="${SCAN_SCHEDULE:-0 */6 * * *}" --uri="$JOB_RUN_URI" --http-method=POST \
+  --schedule="${SCAN_SCHEDULE:-*/30 * * * *}" --uri="$JOB_RUN_URI" --http-method=POST \
   --oauth-service-account-email="$SA" --attempt-deadline=180s \
-  && echo "    + gws-scan-job-trigger (${SCAN_SCHEDULE:-0 */6 * * *} -> ${JOB}:run)" \
+  && echo "    + gws-scan-job-trigger (${SCAN_SCHEDULE:-*/30 * * * *} -> ${JOB}:run)" \
   || echo "    (scheduler trigger skipped — create manually if needed)"
 
 echo "==> [3/3] Done."

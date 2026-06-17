@@ -58,7 +58,7 @@ def _effective_start_date(tenant) -> str:
     # (0) would be silently overridden by the global preset, and the Settings dropdown (which reads the
     # per-tenant value) would show "Custom date" while the scan used the global rolling window.
     days = (tenant["feed_lookback_days"] if "feed_lookback_days" in tenant.keys() else 0) or 0
-    if days and days > 0:
+    if days > 0:
         return (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
     return tenant["feed_start_date"]
 

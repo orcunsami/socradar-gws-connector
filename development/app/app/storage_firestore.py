@@ -123,6 +123,7 @@ def create_tenant(customer_id, name, verified_domains, feed_base, feed_company_i
         "feed_company_id": feed_company_id, "feed_api_key": feed_api_key,
         "feed_start_date": feed_start_date, "enabled_actions": json.dumps([]),
         "quarantine_group": "", "auto_baseline_at": 0, "feed_lookback_days": 0, "feed_high_water": "",
+        "scan_interval": "off",
         "admin_subject": admin_subject, "service_account": service_account, "created_at": time.time(),
     }
     try:
@@ -312,8 +313,11 @@ def last_scan(tenant_id):
 
 
 def recent_scans(tenant_id, limit=20):
-    runs = [s.to_dict() | {"id": s.id} for s in _by_tenant(_SCANS, tenant_id)
-            if (s.to_dict() or {}).get("finished_at")]
+    runs = []
+    for s in _by_tenant(_SCANS, tenant_id):
+        d = s.to_dict() or {}
+        if d.get("finished_at") is not None:       # IS NOT NULL parity with sqlite (don't drop a finished_at=0)
+            runs.append(d | {"id": s.id})
     return sorted(runs, key=lambda r: r.get("started_at", 0), reverse=True)[:limit]
 
 

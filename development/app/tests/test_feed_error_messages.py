@@ -61,5 +61,21 @@ except connector.ConnectorError as e:
     chk("401 -> 'check the feed API key / company id'", "check the feed API key / company id" in m)
     chk("401 -> NOT framed as a feed-server outage", "feed-server outage" not in m)
 
+# stream_source is the DEFAULT (streaming) scan path — the live scan hits THIS, not socradar_fetch. It must
+# use the SAME shared helper so the message never diverges (regression guard for the 2026-06-17 miss).
+connector._get = _raise(502)
+try:
+    list(connector.stream_source("https://preprod.x", "132", "k", "botnet", "2026-01-01"))  # generator -> iterate
+    chk("stream_source 502 raised a ConnectorError", False)
+except connector.ConnectorError as e:
+    chk("stream_source (LIVE scan path) 502 -> 'feed-server outage'", "feed-server outage" in str(e))
+
+connector._get = _raise(401)
+try:
+    list(connector.stream_source("https://x", "132", "k", "pii", "2026-01-01"))
+    chk("stream_source 401 raised a ConnectorError", False)
+except connector.ConnectorError as e:
+    chk("stream_source 401 -> 'check the feed API key / company id'", "check the feed API key / company id" in str(e))
+
 print(f"\nRESULT: {'PASS' if F == 0 else 'FAIL'} — feed 5xx vs 4xx error messaging ({P} ok, {F} fail)")
 sys.exit(0 if F == 0 else 1)

@@ -35,13 +35,12 @@ Two ways. Most customers use the button.
 
 Click the button at the top. Google Cloud Shell opens in your browser with this repository cloned and a step-by-step tutorial in the side panel. No local install. Three scripts at the top of the project run the whole flow, in order:
 
-1. **`bash create-env.sh`** — auto-detects your project, domain and region and writes `deploy/customer.env` for you (git-ignored). You add only your SOCRadar feed key + company id.
-2. **Create a sign-in OAuth client** (one time, for the admin UI) and paste its id/secret into `deploy/customer.env` — the side-panel tutorial shows the exact clicks.
-3. **`bash setup.sh`** — validates and deploys: enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation, stores the feed key and the audit key in Secret Manager, deploys a private Cloud Run service, and creates the periodic-scan scheduler. It prints the service account client id + the four scopes.
-4. **Authorize domain-wide delegation** in `admin.google.com` (paste that client id + scopes).
-5. **`bash open-panel.sh`** — opens the admin UI (reads your project/region from the config); then use Cloud Shell Web Preview on port 8080.
+1. **`bash create-env.sh`** — auto-detects your project, domain and region and writes `deploy/customer.env` for you (git-ignored). You add only your SOCRadar feed key + company id. Sign-in is native IAP, so there is **no OAuth client to create**.
+2. **`bash setup.sh`** — validates and deploys: enables the APIs, creates a least-privilege service account, self-binds keyless domain-wide delegation, stores the feed key and the audit key in Secret Manager, deploys a private Cloud Run service with **durable Firestore storage** (the default), and creates the periodic-scan scheduler. It prints the service account client id + the four scopes.
+3. **Authorize domain-wide delegation** in `admin.google.com` (paste that client id + scopes).
+4. **`bash enable-iap.sh`** — turns on native IAP and prints the admin URL; open it in your browser (Google signs you in at the edge — no proxy, no OAuth client).
 
-For a headless scan test with no UI (and no OAuth client), set `DEPLOY_MODE=job` + `STORAGE_BACKEND=firestore` in `deploy/customer.env` before step 3.
+For a headless scan test with no UI, set `DEPLOY_MODE=job` in `deploy/customer.env` before step 2 (Firestore is already the default).
 
 One manual step remains: your Workspace super admin authorizes that client id for the four directory scopes in `admin.google.com`, their own way.
 
@@ -80,7 +79,7 @@ Every action is off by default and enabled per tenant. High impact actions need 
 
 ## Security
 
-Identity is keyless. The connector uses domain-wide delegation through `signJwt`, so there is no service account key file to store or leak. The Cloud Run service is private and requires authentication. Sign in is Google OAuth restricted to your domain. Destructive actions are limited to a remediation admin list, and the high impact ones need a second admin. Automatic remediation is off by default and ships with a dry run mode, a per scan blast cap, a kill switch, a rate limit, and a first scan baseline gate. The audit log is an HMAC hash chain held in Secret Manager, separate from the data store, re-checked daily.
+Identity is keyless. The connector uses domain-wide delegation through `signJwt`, so there is no service account key file to store or leak. The Cloud Run service is private and requires authentication. Sign-in is native Identity-Aware Proxy restricted to your domain (no OAuth client to manage). Destructive actions are limited to a remediation admin list, and the high impact ones need a second admin. Automatic remediation is off by default and ships with a dry run mode, a per scan blast cap, a kill switch, a rate limit, and a first scan baseline gate. The audit log is an HMAC hash chain held in Secret Manager, separate from the data store, re-checked daily.
 
 Scopes are sensitive, not restricted. No Gmail or Drive access. Feed records are sanitized on ingest, so a leaked password is stored as a boolean, never as plaintext.
 

@@ -26,10 +26,15 @@ APIs from the customer's Cloud Run, after the admin authorizes domain-wide deleg
 4. `gcloud` ≥ 378, `python3`, and the SOCRadar feed **company ID + API key** (from SOCRadar).
 5. Confirm the org doesn't block domain-wide delegation via an app-access policy.
 
-## Step 0 — Create the admin-UI sign-in OAuth client (once)
-The admin UI signs in with Google OAuth, so the service needs a **Web OAuth client**. Without
-`GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` the service fail-closes at startup (no sign-in method) and
-the deploy in Step 1 reports an unhealthy revision. In `console.cloud.google.com` → **APIs & Services →
+## Step 0 — (OPTIONAL) Create an admin-UI sign-in OAuth client
+> **Skip this for the default setup.** Sign-in is **native IAP** (`USE_IAP=true`, the default) — Google signs
+> you in at the edge and the app trusts the IAP identity, so there is **no OAuth client to create**. Leave
+> `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` empty; after deploy run `bash enable-iap.sh`. This step is ONLY for
+> the alternate `USE_IAP=false` local-proxy path (`open-panel.sh`).
+
+For the `USE_IAP=false` proxy path only, the admin UI signs in with Google OAuth, so the service needs a
+**Web OAuth client**. With `USE_IAP=false` and no `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` the service
+fail-closes at startup. In `console.cloud.google.com` → **APIs & Services →
 Credentials → Create credentials → OAuth client ID → Web application**. Add an authorized redirect URI:
 - `http://localhost:8080/auth/callback` if you'll reach the UI via `gcloud run services proxy` (Step 3), and/or
 - `<service-url>/auth/callback` once you know the deployed URL (you can add it after Step 1).
@@ -190,7 +195,7 @@ SA=gws-connector@$PROJECT.iam.gserviceaccount.com
 gcloud services enable cloudscheduler.googleapis.com --project=$PROJECT
 gcloud run services add-iam-policy-binding gws-connector --region=$REGION \
   --member="serviceAccount:$SA" --role=roles/run.invoker --project=$PROJECT
-gcloud scheduler jobs create http gws-scan --location=$REGION --schedule="0 */6 * * *" \
+gcloud scheduler jobs create http gws-scan --location=$REGION --schedule="*/30 * * * *" \
   --uri="$URL/tasks/scan" --http-method=POST \
   --oidc-service-account-email=$SA --oidc-token-audience="$URL" \
   --headers=X-Scan-Token=YOUR_TOKEN --project=$PROJECT
