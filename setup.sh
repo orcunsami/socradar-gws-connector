@@ -91,6 +91,7 @@ export PROJECT REGION="${REGION:-europe-west1}" ADMIN_SUBJECT DOMAIN CUSTOMER_ID
        FEED_BASE="${FEED_BASE:-https://platform.socradar.com}" FEED_COMPANY_ID \
        STORAGE_BACKEND="${STORAGE_BACKEND:-sqlite}" REMEDIATION_ADMINS="${REMEDIATION_ADMINS:-$ADMIN_SUBJECT}" \
        GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}" \
+       USE_IAP="${USE_IAP:-true}" \
        SA_EMAIL="${SA_EMAIL:-}"
 
 # The admin-UI SERVICE fail-closes on Cloud Run with no sign-in method, so the container would

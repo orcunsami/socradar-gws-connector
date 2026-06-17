@@ -128,13 +128,13 @@ FEED_COMPANY_ID=
 # --------------------------------------------------------------------
 FEED_BASE=https://platform.socradar.com
 
-# Admin-UI sign-in. Default USE_IAP=true uses native Cloud Run IAP — NO OAuth client needed; you just run
-# 'bash enable-iap.sh' after deploy. Leave GOOGLE_CLIENT_ID/SECRET empty. (Set USE_IAP=false ONLY if you want
-# the local-machine proxy path open-panel.sh, which uses the app's own Google OAuth — then create a Web OAuth
-# client with redirect http://localhost:8080/auth/callback and paste id+secret below.)
+# Admin-UI sign-in: native Cloud Run IAP — NO OAuth client needed. Just run 'bash enable-iap.sh' after deploy.
 USE_IAP=true
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
+# OAuth is ONLY for USE_IAP=false (the local-machine proxy path, open-panel.sh). To use it instead of IAP:
+# set USE_IAP=false, create a Web OAuth client (redirect http://localhost:8080/auth/callback), then
+# uncomment the next two lines and paste the id + secret:
+#GOOGLE_CLIENT_ID=
+#GOOGLE_CLIENT_SECRET=
 
 DEPLOY_MODE=service
 STORAGE_BACKEND=sqlite
