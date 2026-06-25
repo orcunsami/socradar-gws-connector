@@ -2,7 +2,7 @@
 """
 Deterministic close-the-loop test — no live SOCRadar, no gcloud.
 Close-by-alarm-id contract (Incident V4: POST /api/company/{id}/alarms/status/change {alarm_ids,status},
-NO operator email — live-verified on preprod). Verifies the client body, best-effort never-raises, alarm
+NO operator email — live-verified). Verifies the client body, best-effort never-raises, alarm
 ids persisted at ingest, close-after-remediate + outcome recorded, decoupling, and opt-in gating.
 """
 import json
@@ -34,7 +34,7 @@ def fake_req(url, data, headers, method="POST"):
 
 
 connector._req = fake_req
-res = connector.socradar_close_alarms("https://preprod.socradar.com", "132", "key", [111, 222])
+res = connector.socradar_close_alarms("https://platform.socradar.com", "132", "key", [111, 222])
 c["endpoint = /alarms/status/change"] = len(calls) == 1 and "/api/company/132/alarms/status/change" in calls[0][0]
 body = calls[0][1]
 c["body alarm_ids"] = body.get("alarm_ids") == [111, 222]

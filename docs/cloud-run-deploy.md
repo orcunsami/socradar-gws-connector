@@ -5,14 +5,14 @@
 > `docs/deploy-to-gcp-guide.md`. The managed deploy was run E2E and proven (`/tasks/scan` found=3), then
 > torn down to $0 (EXP-GOOGLE-0017, TASK-0003). Use the guide, not this file. Kept for history.
 >
-> ~~Status: NOT deployed. Project `socradar-gws-test-260602` has billing OFF.~~ (no longer true — deploy proven + torn down)
+> ~~Status: NOT deployed. Project `YOUR_PROJECT_ID` has billing OFF.~~ (no longer true — deploy proven + torn down)
 
 ## Shape
 Periodic feed-poller → **Cloud Run JOB** (runs, exits) + **Cloud Scheduler** trigger.
 NOT an always-on Service. Job runs the same `gws_connector_poc.py real-feed ...`.
 
 ## Auth model on Cloud Run
-- Runtime identity = the DWD service account `socradar-gws-test@socradar-gws-test-260602.iam.gserviceaccount.com`.
+- Runtime identity = the DWD service account `SA_NAME@YOUR_PROJECT_ID.iam.gserviceaccount.com`.
 - It self-signs the DWD JWT via IAM `signJwt`, so it needs `roles/iam.serviceAccountTokenCreator` **on itself**.
 - No `BOOTSTRAP_TOKEN` env on Cloud Run — `google.auth.default()` picks up the metadata-server token. (Local docker passes `BOOTSTRAP_TOKEN`.)
 - DWD (domain-wide delegation) client + 3 scopes already configured in admin.google.com.
@@ -20,8 +20,8 @@ NOT an always-on Service. Job runs the same `gws_connector_poc.py real-feed ...`
 ## Steps (gated on billing + greenlight)
 ```bash
 GC=~/google-cloud-sdk/bin/gcloud
-PROJECT=socradar-gws-test-260602
-SA=socradar-gws-test@$PROJECT.iam.gserviceaccount.com
+PROJECT=your-gcp-project
+SA=your-sa-name@$PROJECT.iam.gserviceaccount.com
 REGION=europe-west1
 
 # 1. Enable billing (CONSCIOUS DECISION — Azure 5587 TL lesson; this job is free-tier-cheap but billing acct must exist)
@@ -50,7 +50,7 @@ docker tag gws-connector:poc $IMG && docker push $IMG
 $GC run jobs deploy gws-connector --image=$IMG --region=$REGION \
    --service-account=$SA \
    --set-secrets=SOCRADAR_KEY=socradar-feed-key:latest \
-   --args=real-feed,132,2026-06-01,https://preprod.socradar.com
+   --args=real-feed,132,2026-06-01,https://platform.socradar.com
 
 # 7. Schedule a 30-min tick (per-tenant Auto-scan interval gates which scans actually run)
 $GC scheduler jobs create http gws-poller --location=$REGION --schedule="*/30 * * * *" \

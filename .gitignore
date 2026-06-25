@@ -9,10 +9,10 @@ service-account*.json
 *.local.*
 development/poc/test-users.local.md
 
-# PoC scratch — carries real test passwords / emails / project id (not product code)
+# PoC scratch — local-only working notes (not product code)
 development/poc/
 
-# API reference dir holds a real preprod key (postman collection) — exclude the whole dir
+# API reference dir — local-only, excluded from the package
 api-reference/
 
 # Raw research dumps + auto handoffs (working notes, real identifiers)

@@ -337,7 +337,7 @@ def fetch_all_sources(base, company_id, api_key, start_date):
 
 
 # ---------- SOCRadar write-back: close the alarm after remediation (close the loop) ----------
-# Incident API V4 — VERIFIED LIVE on preprod (close + restore):
+# Incident API V4 — verified against the live Incident API (close + restore):
 #   POST {base}/api/company/{cid}/alarms/status/change   body {alarm_ids:[int], status:int, comments?}
 # status: 0=OPEN, 1=INVESTIGATING, 2=RESOLVED (close), 9=FALSE_POSITIVE, 12=MITIGATED.
 # Closes by ALARM ID (every botnet/pii feed record carries alarmId) — NO operator email, ONE endpoint.

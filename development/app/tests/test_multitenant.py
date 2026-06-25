@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 # isolated temp DB before importing app modules
 _tmp = tempfile.mkdtemp()
 os.environ["DB_PATH"] = os.path.join(_tmp, "test.sqlite3")
-os.environ["DEFAULT_CUSTOMER_ID"] = "C0tandogan"
+os.environ["DEFAULT_CUSTOMER_ID"] = "C0example"
 os.environ["FEED_FULL_SCAN"] = "false"   # this test mocks the legacy fetch_all_sources path
 os.environ["DEFAULT_DOMAIN"] = "example.com"
 
@@ -39,7 +39,7 @@ def main():
     t1 = db.first_tenant()                                  # example.com (seeded)
     db.update_tenant(t1["id"], feed_api_key="x")            # any non-empty key
     t2_id = db.create_tenant("C0betacorp", "Beta Corp", ["beta-corp.example"],
-                             "https://preprod.socradar.com", "132", "x", "2026-06-01")
+                             "https://platform.socradar.com", "132", "x", "2026-06-01")
     t2 = db.get_tenant(t2_id)
 
     r1 = service.run_scan(db.get_tenant(t1["id"]), "admin@example.com")
@@ -55,7 +55,7 @@ def main():
     checks = {
         "tenant1 sees its 3 in-domain users": sorted(f1) == ["test1@example.com", "test2@example.com", "test3@example.com"],
         "tenant1 skipped the foreign acme-corp address": "victim@acme-corp.com" not in f1,
-        "tenant2 sees ZERO tandogan users (same feed, different domain)": f2 == [],
+        "tenant2 sees ZERO foreign-domain users (same feed, different domain)": f2 == [],
         "tenant2 in_scope is 0": r2["in_scope"] == 0,
         "audit is per-tenant (tenant2 has its own scan entry)": len(db.list_audit(t2_id)) >= 1,
         "tenant1 audit does not contain tenant2 actions": all(

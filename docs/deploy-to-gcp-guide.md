@@ -315,7 +315,7 @@ client needed for the UI).
   admins must sign in again. Acceptable for v1; to keep sessions stable across redeploys, store
   `SECRET_KEY` in Secret Manager once and inject it via `--set-secrets` instead of regenerating.
 - **Before publishing the deploy package to a PUBLIC repo:** the dev copy of `development/app/.env`
-  holds a real preprod feed key (gitignored AND gcloudignored, so it never ships) — still, scrub/rotate
+  holds a real feed key (gitignored AND gcloudignored, so it never ships) — still, scrub/rotate
   it and ship only `.env.example`. Run `Skill("pre-public-leak-scan")` before any public push.
 
 ## Alternative distribution paths (documented, not the default)

@@ -81,7 +81,7 @@ db.update_tenant(t["id"], enabled_actions=_json.dumps(["signout"]))
 db.upsert_flagged(t["id"], "v@example.com", {"botnet"}, "found", 1.0, [1])
 fid = [r for r in db.list_flagged(t["id"]) if r["email"] == "v@example.com"][0]["id"]
 cl = TestClient(main.app)
-r0 = cl.get("/auth/login")   # dev-login -> session as ADMIN_SUBJECT (orcun), who is NOT in the allowlist
+r0 = cl.get("/auth/login")   # dev-login -> session as ADMIN_SUBJECT (the operator), who is NOT in the allowlist
 csrf = __import__("re").search(r'name="csrf" value="([^"]+)"', cl.get("/flagged").text).group(1)
 rr = cl.post(f"/flagged/{fid}/remediate", data={"action": "signout", "csrf": csrf}, follow_redirects=False)
 c["non-admin remediate BLOCKED (RBAC)"] = rr.status_code == 303 and "err=forbidden" in rr.headers.get("location", "")

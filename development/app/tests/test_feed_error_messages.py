@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """A feed 5xx (502/503/504) is a SOCRadar feed-SERVER outage (transient — wait), NOT a connector/config bug;
 a 401/403 is a key/company-id problem (fix it). The audit message must distinguish them so an operator doesn't
-think the connector is broken during a feed outage (real incident 2026-06-17: preprod.socradar.com 502 on every
-path — confirmed by connector + Postman + an independent curl). No network. Run from the app dir."""
+think the connector is broken during a feed outage (a feed-server 502 outage on every
+path). No network. Run from the app dir."""
 import io
 import os
 import sys
@@ -35,7 +35,7 @@ def chk(name, cond):
 # 5xx -> clear, non-alarming "feed-server outage, not the connector or your config"
 connector._get = _raise(502)
 try:
-    connector.socradar_fetch("https://preprod.x", "132", "k", "botnet", "2026-01-01")
+    connector.socradar_fetch("https://feed.example", "132", "k", "botnet", "2026-01-01")
     chk("502 raised a ConnectorError", False)
 except connector.ConnectorError as e:
     m = str(e)
@@ -65,7 +65,7 @@ except connector.ConnectorError as e:
 # use the SAME shared helper so the message never diverges (regression guard for the 2026-06-17 miss).
 connector._get = _raise(502)
 try:
-    list(connector.stream_source("https://preprod.x", "132", "k", "botnet", "2026-01-01"))  # generator -> iterate
+    list(connector.stream_source("https://feed.example", "132", "k", "botnet", "2026-01-01"))  # generator -> iterate
     chk("stream_source 502 raised a ConnectorError", False)
 except connector.ConnectorError as e:
     chk("stream_source (LIVE scan path) 502 -> 'feed-server outage'", "feed-server outage" in str(e))

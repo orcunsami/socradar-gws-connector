@@ -19,6 +19,8 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 BASE = "http://127.0.0.1:8080"
+FEED_BASE = os.environ.get("SMOKE_FEED_BASE", "https://platform.socradar.com")
+TEST_DOMAIN = os.environ.get("SMOKE_TEST_DOMAIN", "example.com")
 
 
 def opener():
@@ -65,7 +67,7 @@ def main():
         data = urllib.parse.urlencode({"csrf": csrf}).encode()
         flagged = op.open(urllib.request.Request(BASE + "/scan", data=data, method="POST")).read().decode()
 
-        emails = sorted(set(re.findall(r"test\d+@tandogan\.dev", flagged)))
+        emails = sorted(set(re.findall(rf"test\d+@{re.escape(TEST_DOMAIN)}", flagged)))
         found = flagged.count('pill ok">found')
         print("flagged emails (by the app):", emails)
         print("found-in-directory pills:", found)
@@ -86,7 +88,7 @@ def main():
         from app.config import settings as cfg
         op.open(urllib.request.Request(BASE + "/tenants", method="POST", data=urllib.parse.urlencode({
             "csrf": csrf, "name": "Beta Corp (sim)", "customer_id": "C0betacorp",
-            "verified_domains": "beta-corp.example", "feed_base": "https://preprod.socradar.com",
+            "verified_domains": "beta-corp.example", "feed_base": FEED_BASE,
             "feed_company_id": "132", "feed_start_date": "2026-06-01",
             "feed_api_key": cfg.feed_api_key}).encode())).read()
         # tenant1 is active (no switch button); the first switch button is tenant2
@@ -94,17 +96,17 @@ def main():
         tid2 = re.search(r'name="tenant_id" value="(\d+)"', tpage).group(1)
         op.open(urllib.request.Request(BASE + "/tenants/switch", method="POST",
             data=urllib.parse.urlencode({"csrf": csrf, "tenant_id": tid2}).encode())).read()
-        # scan tenant2 (Beta Corp) against the SAME feed -> tandogan users are foreign -> filtered out
+        # scan tenant2 (Beta Corp) against the SAME feed -> the seeded test-domain users are foreign -> filtered out
         f2 = op.open(urllib.request.Request(BASE + "/scan", method="POST",
             data=urllib.parse.urlencode({"csrf": csrf}).encode())).read().decode()
-        t2_emails = sorted(set(re.findall(r"test\d+@tandogan\.dev", f2)))
+        t2_emails = sorted(set(re.findall(rf"test\d+@{re.escape(TEST_DOMAIN)}", f2)))
         # switch back to tenant1 -> its data is intact and isolated
         tpage2 = op.open(BASE + "/tenants").read().decode()
         tid1 = re.search(r'name="tenant_id" value="(\d+)"', tpage2).group(1)
         op.open(urllib.request.Request(BASE + "/tenants/switch", method="POST",
             data=urllib.parse.urlencode({"csrf": csrf, "tenant_id": tid1}).encode())).read()
         f1 = op.open(BASE + "/flagged").read().decode()
-        t1_emails = sorted(set(re.findall(r"test\d+@tandogan\.dev", f1)))
+        t1_emails = sorted(set(re.findall(rf"test\d+@{re.escape(TEST_DOMAIN)}", f1)))
         isolated = (len(t2_emails) == 0) and (len(t1_emails) >= 3)
         print(f"multi-tenant: tenant2(Beta Corp) sees {t2_emails or 'NONE'} ; tenant1 still has {len(t1_emails)} ->",
               "ISOLATED" if isolated else "LEAK!")

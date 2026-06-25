@@ -3,7 +3,7 @@
 sqlite's BEGIN IMMEDIATE). This exercises the transaction-wrapped code path WITHOUT a real emulator (no Java
 here) via a fake client + a passthrough transactional, to prove the merge logic still: unions sources +
 socradar_refs on conflict, refreshes last_seen, and never downgrades a 'found' user on a transient error_*.
-Full backend behaviour is emulator-verified separately + live-verified by Orçun. Run from the app dir."""
+Full backend behaviour is emulator-verified separately + live-verified separately. Run from the app dir."""
 import json
 import os
 import sys
